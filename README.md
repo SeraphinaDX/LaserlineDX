@@ -5,7 +5,7 @@ uses [gotui v5](https://github.com/metaspartan/gotui) to browse files and chat.
 It is a direct-connect Croc alternative: no accounts, no environment-variable
 configuration, and no third-party server required.
 
-**Status: 0.1.0 experimental source release.** The protocol has not undergone
+**Status: 0.2.0 experimental source release.** The protocol has not undergone
 an independent security audit. Do not treat it as a hardened public file server.
 
 ## Build
@@ -34,9 +34,15 @@ Another user enters:
 warp connect W1-PASTE_THE_FULL_CODE_HERE
 ```
 
-In the BBS: **Up/Down** or **j/k** navigate the files; **Enter** downloads the
-selected file; **c** enters chat; **Enter** sends a message; **Esc** exits the
-chat input; **r** refreshes file listings; **q** disconnects.
+In the BBS, use **Up/Down** or **j/k** to move through files, or **PageUp**, **PageDown**, **Home** and **End** for large directories. The file list scrolls with the selected row, and displays the current row range. Mouse-wheel scrolling also works over the file area.
+
+- **F** (or **f**, or **Space**) toggles a flag on the highlighted file. Flagged files are shown with `[x]`.
+- **D** (or **d**) downloads **all flagged files** in file-list order, one at a time. Click **[ Download All ]** in the bottom action bar to do the same with the mouse.
+- **Left-click** a file to select it; **right-click** the file row to flag/unflag it. The mouse hit target follows the scrolled list.
+- **Enter** opens the **encrypted chat prompt**, not a file download. **Enter** while composing sends the message; **Escape** leaves chat and returns to file navigation. You can also click **[ Chat ]**, **[ Files ]**, or the chat prompt area.
+- **r** refreshes the file listing; flags survive a refresh when the exact file version remains available. **q** disconnects from file-navigation mode; **Ctrl+C** always quits.
+
+The file pane and chat pane are side by side on wide terminals (92+ columns). On narrower terminals, Enter/chat switches the main pane between files and chat. The minimum terminal size is 40 columns by 16 rows. A terminal with mouse reporting enabled is needed for pointer actions (gotui enables this by default).
 
 Downloads default to `./WarpDownloads`. You can select another path:
 
@@ -89,6 +95,8 @@ listening port is **TCP 47477**.
 
 ## Reliable transfers
 
+Flagged downloads are queued sequentially, rather than started all at once. A successful file is removed from the flagged selection; if one fails, the batch pauses and that file and the unattempted files remain flagged so you can retry them. Your flag selections are only kept for the current connection, but the on-disk partial files survive reconnects.
+
 Warp downloads to `filename.warp-part` and writes a nearby JSON metadata file.
 If the connection drops, Warp retries up to four times automatically; on
 subsequent sessions, selecting that file continues from the on-disk offset.
@@ -98,7 +106,7 @@ unchanged while transferring. A changed file has a new ID and must start a
 new download. Warp does not overwrite completed downloads.
 
 For now, there are a few constraints: downloads are one at a time per client,
-the file list is a snapshot until refreshed, all server clients need to be
+the file list is a snapshot until refreshed (and limited to 10,000 files per share), all server clients need to be
 able to reach the host over TCP, uploads are not supported, and the server
 shows a terminal log rather than an interactive host chat pane.
 
@@ -106,6 +114,7 @@ shows a terminal log rather than an interactive host chat pane.
 
 ```sh
 go test ./...
+go test -race ./...
 go vet ./...
 ```
 
