@@ -55,7 +55,7 @@ func fileID(name string, st fs.FileInfo) string {
 	return hex.EncodeToString(sum[:16])
 }
 func describe(name string, st fs.FileInfo) wire.File {
-	return wire.File{ID: fileID(name, st), Name: filepath.ToSlash(name), Size: st.Size(), ModTime: st.ModTime().UnixNano()}
+	return wire.File{ID: fileID(name, st), Name: filepath.ToSlash(name), Size: st.Size(), ModTime: st.ModTime().UnixNano(), IsDir: st.IsDir()}
 }
 
 func (s *Shares) List() ([]wire.File, error) {
@@ -79,11 +79,11 @@ func (s *Shares) List() ([]wire.File, error) {
 		if err != nil {
 			return err
 		}
-		if ent.IsDir() || !ent.Type().IsRegular() {
+		if path == s.path || (!ent.IsDir() && !ent.Type().IsRegular()) {
 			return nil
 		}
 		if len(result) >= maxFiles {
-			return fmt.Errorf("too many files (maximum %d)", maxFiles)
+			return fmt.Errorf("too many shared entries (maximum %d)", maxFiles)
 		}
 		rel, err := filepath.Rel(s.path, path)
 		if err != nil {
@@ -97,7 +97,7 @@ func (s *Shares) List() ([]wire.File, error) {
 		} // file changed while listing
 		st, err := f.Stat()
 		f.Close()
-		if err == nil && st.Mode().IsRegular() {
+		if err == nil && (st.Mode().IsRegular() || st.IsDir()) {
 			result = append(result, describe(rel, st))
 		}
 		return nil
@@ -112,7 +112,7 @@ func (s *Shares) OpenByID(id string) (*os.File, wire.File, error) {
 		return nil, wire.File{}, err
 	}
 	for _, item := range list {
-		if item.ID != id {
+		if item.IsDir || item.ID != id {
 			continue
 		}
 		f, err := s.root.Open(filepath.FromSlash(item.Name))

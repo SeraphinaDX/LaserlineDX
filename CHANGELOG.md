@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 — Tab chat, Enter downloads, real directory browser
+
+- Changed the chat shortcut from Enter to **Tab**; Enter still sends a message while chatting, and Escape leaves chat.
+- **Enter** in file browsing now descends into a directory or starts a resumable, SHA-256-verified download of one selected file.
+- The server now announces directory entries, including empty directories, alongside regular files.
+- The client displays a real hierarchical browser, with folders before files, a breadcrumb-like current path in the title, and a `[..] Parent directory` row in subfolders.
+- **Backspace** or **Escape** goes to the parent while file browsing. Folder navigation preserves selection and scrolls large directories correctly.
+- Flags are file-only and persist across navigation and refresh; **D** still downloads flagged files from multiple directories.
+- Added hierarchical navigation, empty-folder, scrolling/refresh and single-file Enter unit tests, plus server directory-listing tests.
+- Upgrade both host and clients together; old clients cannot distinguish new folder entries from files.
+
 ## 0.3.0 — Download progress and dedicated transfer status
 
 - Made **Space** the sole keyboard shortcut for flagging/unflagging files; removed F/f for that purpose. Right-click flagging remains available.

@@ -4,6 +4,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"path"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -108,6 +110,72 @@ type downloadStatus struct {
 	lastSample     time.Time
 }
 
+// A directory is a navigable row, not a downloadable file. The parent row
+// is synthetic; real directories (including empty ones) come from the server.
+// Synthesizing intermediate folders also handles older servers whose listing
+// only contained files, without changing the underlying download IDs.
+type browserEntry struct {
+	file   wire.File
+	parent bool
+}
+
+func makeBrowserEntries(all []wire.File, dir string) []browserEntry {
+	seen := make(map[string]wire.File)
+	for _, f := range all {
+		if f.Name == "" || strings.HasPrefix(f.Name, "/") {
+			continue
+		}
+		rel := f.Name
+		if dir != "" {
+			if !strings.HasPrefix(f.Name, dir+"/") {
+				continue
+			}
+			rel = strings.TrimPrefix(f.Name, dir+"/")
+		}
+		if rel == "" {
+			continue
+		}
+		if slash := strings.IndexByte(rel, '/'); slash >= 0 {
+			child := rel[:slash]
+			name := child
+			if dir != "" {
+				name = dir + "/" + child
+			}
+			// A directory is displayed once regardless of how many files it has.
+			if _, ok := seen[name]; !ok {
+				seen[name] = wire.File{Name: name, IsDir: true}
+			}
+			continue
+		}
+		if f.IsDir || !strings.ContainsRune(rel, '/') {
+			seen[f.Name] = f
+		}
+	}
+	entries := make([]browserEntry, 0, len(seen)+1)
+	if dir != "" {
+		entries = append(entries, browserEntry{parent: true})
+	}
+	for _, f := range seen {
+		entries = append(entries, browserEntry{file: f})
+	}
+	start := 0
+	if dir != "" {
+		start = 1 // leave .. at the top
+	}
+	sort.Slice(entries[start:], func(i, j int) bool {
+		x, y := entries[i+start].file, entries[j+start].file
+		if x.IsDir != y.IsDir {
+			return x.IsDir
+		}
+		xName, yName := strings.ToLower(path.Base(x.Name)), strings.ToLower(path.Base(y.Name))
+		if xName == yName {
+			return x.Name < y.Name
+		}
+		return xName < yName
+	})
+	return entries
+}
+
 func (a *bbs) observeDownload(e downloadEvent, now time.Time) {
 	d := &a.download
 	newAttempt := e.index != d.index || e.Attempt != d.attempt
@@ -145,6 +213,8 @@ func (a *bbs) observeDownload(e downloadEvent, now time.Time) {
 
 type bbs struct {
 	files     []wire.File
+	entries   []browserEntry // only the rows in the current directory
+	dir       string         // slash-separated path relative to the share root
 	cursor    int
 	scroll    int
 	flagged   map[string]bool // stable file ID, not row number
@@ -176,11 +246,12 @@ func Run(ctx context.Context, c *transfer.Client, welcome wire.Message, download
 	defer cancel()
 	a := &bbs{
 		ctx: ctx, client: c, files: welcome.Files, nick: welcome.Name, people: welcome.Users,
-		status:    "Connected securely (TLS 1.3). Space flags files; D downloads flagged files.",
+		status:    "Connected securely (TLS 1.3). Enter opens/downloads, Tab chats, Space flags, D downloads flagged.",
 		downloads: downloads, progress: make(chan downloadEvent, 32), completed: make(chan batchResult, 1),
 		input: widgets.NewInput(), flagged: make(map[string]bool),
 	}
 	a.chat = append(a.chat, "Welcome to Warp! Your chat history is session-only.")
+	a.rebuildEntries("")
 	a.draw()
 	events := ui.PollEventsWithContext(ctx)
 	for {
@@ -245,17 +316,12 @@ func Run(ctx context.Context, c *transfer.Client, welcome wire.Message, download
 func (a *bbs) message(m wire.Message) {
 	switch m.Type {
 	case "files":
-		oldID := ""
-		if a.cursor >= 0 && a.cursor < len(a.files) {
-			oldID = a.files[a.cursor].ID
-		}
+		oldName := a.selectedName()
 		a.files = m.Files
 		live := make(map[string]bool, len(a.files))
-		a.cursor = 0
-		for i, f := range a.files {
-			live[f.ID] = true
-			if f.ID == oldID {
-				a.cursor = i
+		for _, f := range a.files {
+			if !f.IsDir {
+				live[f.ID] = true
 			}
 		}
 		for id := range a.flagged {
@@ -263,7 +329,11 @@ func (a *bbs) message(m wire.Message) {
 				delete(a.flagged, id)
 			}
 		}
-		a.keepVisible()
+		// A removed directory is no longer a viable browsing location.
+		for a.dir != "" && !directoryExists(a.files, a.dir) {
+			a.dir = parentDir(a.dir)
+		}
+		a.rebuildEntries(oldName)
 		a.status = "File area refreshed (existing flags preserved for unchanged files)"
 	case "notice":
 		a.addLine("* " + m.Text)
@@ -272,6 +342,73 @@ func (a *bbs) message(m wire.Message) {
 		a.addLine(m.Name + ": " + m.Text)
 	case "error":
 		a.status = "Server: " + m.Error
+	}
+}
+
+func directoryExists(files []wire.File, dir string) bool {
+	for _, f := range files {
+		if (f.IsDir && f.Name == dir) || strings.HasPrefix(f.Name, dir+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func parentDir(dir string) string {
+	if dir == "" || !strings.ContainsRune(dir, '/') {
+		return ""
+	}
+	return path.Dir(dir)
+}
+
+func (a *bbs) selectedName() string {
+	if a.cursor >= 0 && a.cursor < len(a.entries) && !a.entries[a.cursor].parent {
+		return a.entries[a.cursor].file.Name
+	}
+	return ""
+}
+
+func (a *bbs) rebuildEntries(selectName string) {
+	a.entries = makeBrowserEntries(a.files, a.dir)
+	a.cursor = 0
+	for i, e := range a.entries {
+		if !e.parent && selectName != "" && e.file.Name == selectName {
+			a.cursor = i
+			break
+		}
+	}
+	a.keepVisible()
+}
+
+func (a *bbs) browse(dir, selectName string) {
+	a.dir, a.scroll = dir, 0
+	a.rebuildEntries(selectName)
+	if dir != "" && selectName == "" && len(a.entries) > 1 {
+		a.cursor = 1 // highlight first child rather than the parent row
+	}
+	a.keepVisible()
+	a.status = "Browsing /" + dir + " — Enter opens a folder or downloads a file; .. goes back."
+}
+
+func (a *bbs) upDir() {
+	if a.dir != "" {
+		child := a.dir
+		a.browse(parentDir(child), child)
+	}
+}
+
+func (a *bbs) activate() {
+	if a.cursor < 0 || a.cursor >= len(a.entries) {
+		return
+	}
+	e := a.entries[a.cursor]
+	switch {
+	case e.parent:
+		a.upDir()
+	case e.file.IsDir:
+		a.browse(e.file.Name, "")
+	default:
+		a.startDownloads([]wire.File{e.file})
 	}
 }
 func (a *bbs) addLine(s string) {
@@ -329,9 +466,13 @@ func (a *bbs) key(id string) bool {
 	switch id {
 	case "q":
 		return true
-	case "<Enter>", "c", "t", "<Tab>":
+	case "<Tab>":
 		a.composing = true
 		a.status = "Chat active. Enter sends your message; Escape returns to the files."
+	case "<Enter>":
+		a.activate()
+	case "<Backspace>", "<Escape>":
+		a.upDir()
 	case "<Space>", " ":
 		a.toggleFlag(a.cursor)
 	case "d", "D":
@@ -348,7 +489,7 @@ func (a *bbs) key(id string) bool {
 		a.cursor = 0
 		a.keepVisible()
 	case "<End>":
-		a.cursor = max(0, len(a.files)-1)
+		a.cursor = max(0, len(a.entries)-1)
 		a.keepVisible()
 	case "r":
 		if a.client != nil {
@@ -411,7 +552,7 @@ func (a *bbs) mouse(id string, x, y int) {
 		return // border/title, not a file
 	}
 	index := a.scroll + y - (a.layout.files.top + 1)
-	if index < 0 || index >= len(a.files) {
+	if index < 0 || index >= len(a.entries) {
 		return
 	}
 	a.cursor = index
@@ -426,40 +567,45 @@ func (a *bbs) leaveChat() {
 	a.input.Cursor = 0
 }
 func (a *bbs) move(amount int) {
-	if len(a.files) == 0 {
+	if len(a.entries) == 0 {
 		return
 	}
-	a.cursor = min(len(a.files)-1, max(0, a.cursor+amount))
+	a.cursor = min(len(a.entries)-1, max(0, a.cursor+amount))
 	a.keepVisible()
 }
 func (a *bbs) keepVisible() {
-	if len(a.files) == 0 {
+	if len(a.entries) == 0 {
 		a.cursor, a.scroll = 0, 0
 		return
 	}
 	rows := max(1, a.layout.fileRows)
-	a.cursor = min(len(a.files)-1, max(0, a.cursor))
+	a.cursor = min(len(a.entries)-1, max(0, a.cursor))
 	if a.cursor < a.scroll {
 		a.scroll = a.cursor
 	} else if a.cursor >= a.scroll+rows {
 		a.scroll = a.cursor - rows + 1
 	}
-	a.scroll = min(max(0, len(a.files)-rows), max(0, a.scroll))
+	a.scroll = min(max(0, len(a.entries)-rows), max(0, a.scroll))
 }
 func (a *bbs) scrollBy(n int) {
 	rows := max(1, a.layout.fileRows)
-	maxStart := max(0, len(a.files)-rows)
+	maxStart := max(0, len(a.entries)-rows)
 	a.scroll = min(maxStart, max(0, a.scroll+n))
-	if len(a.files) > 0 {
-		a.cursor = min(len(a.files)-1, max(a.scroll, min(a.cursor, a.scroll+rows-1)))
+	if len(a.entries) > 0 {
+		a.cursor = min(len(a.entries)-1, max(a.scroll, min(a.cursor, a.scroll+rows-1)))
 	}
 }
 func (a *bbs) toggleFlag(index int) {
-	if index < 0 || index >= len(a.files) {
+	if index < 0 || index >= len(a.entries) {
 		a.status = "No file to flag"
 		return
 	}
-	item := a.files[index]
+	e := a.entries[index]
+	if e.parent || e.file.IsDir {
+		a.status = "Only files can be flagged; Enter opens directories"
+		return
+	}
+	item := e.file
 	if a.flagged == nil {
 		a.flagged = make(map[string]bool)
 	}
@@ -473,20 +619,38 @@ func (a *bbs) toggleFlag(index int) {
 func (a *bbs) queued() []wire.File {
 	queue := make([]wire.File, 0, len(a.flagged))
 	for _, f := range a.files {
-		if a.flagged[f.ID] {
+		if !f.IsDir && a.flagged[f.ID] {
 			queue = append(queue, f)
 		}
 	}
 	return queue
 }
-func (a *bbs) downloadFlagged() {
-	if a.busy {
-		a.status = "A download batch is already in progress"
-		return
+func (a *bbs) fileCount() int {
+	n := 0
+	for _, f := range a.files {
+		if !f.IsDir {
+			n++
+		}
 	}
+	return n
+}
+func (a *bbs) downloadFlagged() {
 	queue := a.queued()
 	if len(queue) == 0 {
 		a.status = "Flag files using Space or right-click first"
+		return
+	}
+	a.startDownloads(queue)
+}
+
+// Both Enter on an individual file and D on flagged files use the same TLS
+// transfer worker, progress reporting, SHA-256 checks and resume mechanism.
+func (a *bbs) startDownloads(queue []wire.File) {
+	if a.busy {
+		a.status = "A download is already in progress"
+		return
+	}
+	if len(queue) == 0 {
 		return
 	}
 	if a.client == nil {
@@ -503,7 +667,7 @@ func (a *bbs) downloadFlagged() {
 		batchBytes: batchBytes, index: 1, count: len(queue),
 		message: "Connecting over TLS 1.3...",
 	}
-	a.status = fmt.Sprintf("Downloading %d flagged file(s) sequentially; interrupted files can resume.", len(queue))
+	a.status = fmt.Sprintf("Downloading %d file(s); interrupted transfers can resume.", len(queue))
 	go func() {
 		result := batchResult{total: len(queue)}
 		var completedBytes int64
@@ -550,14 +714,14 @@ func (a *bbs) draw() {
 	header := widgets.NewParagraph()
 	header.Title = " WARP // ENCRYPTED MINI BBS "
 	header.Text = fmt.Sprintf("  * TLS 1.3   |   User: %s   |   Online: %d   |   Files: %d   |   Flagged: %d",
-		a.nick, a.people, len(a.files), len(a.flagged))
+		a.nick, a.people, a.fileCount(), len(a.flagged))
 	header.BorderStyle.Fg = ui.ColorPink
 	header.TitleStyle.Fg = ui.ColorLightCyan
 	header.SetRect(0, 0, width, 3)
 
 	foot := widgets.NewParagraph()
 	foot.BorderStyle.Fg = ui.ColorPink
-	foot.Title = " Space: flag  D: download all  Enter: chat  Esc: files  PgUp/PgDn: scroll  q: quit "
+	foot.Title = " Space: flag  D: all  Enter: open/get  Tab: chat  Esc: back  q: quit "
 	foot.Text = actionBar
 	foot.TextStyle.Fg = ui.ColorLightCyan
 	foot.SetRect(0, height-4, width, height-1)
@@ -576,25 +740,35 @@ func (a *bbs) draw() {
 
 	list := widgets.NewList()
 	start := a.scroll
-	end := min(len(a.files), start+l.fileRows)
-	list.Title = fmt.Sprintf(" FILE AREA // %d-%d of %d | %d flagged ", visibleStart(start, end), end, len(a.files), len(a.flagged))
+	end := min(len(a.entries), start+l.fileRows)
+	where := "/" + a.dir
+	list.Title = fmt.Sprintf(" FILES %s // %d-%d of %d | %d flagged ", safe(where), visibleStart(start, end), end, len(a.entries), len(a.flagged))
 	list.BorderStyle.Fg = ui.ColorLightCyan
 	list.WrapText = false
 	list.Rows = make([]string, 0, max(1, end-start))
 	for i := start; i < end; i++ {
-		f := a.files[i]
+		e := a.entries[i]
+		f := e.file
 		marker := "  "
 		if i == a.cursor {
 			marker = "> "
+		}
+		if e.parent {
+			list.Rows = append(list.Rows, marker+"    [..] Parent directory")
+			continue
+		}
+		if f.IsDir {
+			list.Rows = append(list.Rows, marker+"    [DIR] "+safe(path.Base(f.Name))+"/")
+			continue
 		}
 		flag := "[ ]"
 		if a.flagged[f.ID] {
 			flag = "[x]"
 		}
-		list.Rows = append(list.Rows, fmt.Sprintf("%s%s %s  (%s)", marker, flag, safe(f.Name), formatBytes(f.Size)))
+		list.Rows = append(list.Rows, fmt.Sprintf("%s%s %s  (%s)", marker, flag, safe(path.Base(f.Name)), formatBytes(f.Size)))
 	}
 	if len(list.Rows) == 0 {
-		list.Rows = []string{"  No shared files yet. Press r to refresh."}
+		list.Rows = []string{"  This directory is empty. Press r to refresh."}
 	}
 	list.SelectedRow = max(0, a.cursor-a.scroll)
 	list.SelectedStyle.Fg = ui.ColorLightCyan
@@ -623,7 +797,7 @@ func (a *bbs) draw() {
 		p := widgets.NewParagraph()
 		p.Title = " CHAT PROMPT "
 		p.BorderStyle.Fg = ui.ColorPink
-		p.Text = " Press Enter or click here to write a message."
+		p.Text = " Press Tab or click here to write a message."
 		p.SetRect(l.prompt.left, l.prompt.top, l.prompt.right, l.prompt.bottom)
 		prompt = p
 	}

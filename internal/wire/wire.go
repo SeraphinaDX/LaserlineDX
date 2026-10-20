@@ -17,6 +17,7 @@ type File struct {
 	Name    string `json:"name"`
 	Size    int64  `json:"size"`
 	ModTime int64  `json:"mtime"`
+	IsDir   bool   `json:"is_dir,omitempty"`
 }
 
 type Message struct {

@@ -17,8 +17,9 @@ func testBBS(count, width, height int) *bbs {
 	a := &bbs{flagged: make(map[string]bool), input: widgets.NewInput(),
 		layout: makeLayout(width, height, false)}
 	for i := 0; i < count; i++ {
-		a.files = append(a.files, wire.File{ID: fmt.Sprintf("id-%d", i), Name: fmt.Sprintf("dir/file%04d.txt", i), Size: int64(i)})
+		a.files = append(a.files, wire.File{ID: fmt.Sprintf("id-%d", i), Name: fmt.Sprintf("file%04d.txt", i), Size: int64(i)})
 	}
+	a.rebuildEntries("")
 	return a
 }
 
@@ -103,7 +104,7 @@ func TestFlagQueueAndRefresh(t *testing.T) {
 	// New list order changes, but the same stable IDs remain flagged.
 	newOrder := append([]wire.File{original[19]}, original[:19]...)
 	a.message(wire.Message{Type: "files", Files: newOrder})
-	if a.cursor != 3 || len(a.flagged) != 3 {
+	if a.cursor != 2 || a.entries[a.cursor].file.ID != "id-2" || len(a.flagged) != 3 {
 		t.Fatalf("refresh lost selection or flags: cursor=%d flags=%v", a.cursor, a.flagged)
 	}
 	a.message(wire.Message{Type: "files", Files: append([]wire.File{newOrder[0]}, newOrder[2:]...)})
@@ -114,8 +115,8 @@ func TestFlagQueueAndRefresh(t *testing.T) {
 
 func TestChatKeysAndMouseButtonsInNarrowLayout(t *testing.T) {
 	a := testBBS(10, 50, 24)
-	if a.key("<Enter>") || !a.composing {
-		t.Fatal("Enter did not open chat")
+	if a.key("<Tab>") || !a.composing {
+		t.Fatal("Tab did not open chat")
 	}
 	a.layout = makeLayout(50, 24, true)
 	a.key("F")
@@ -156,6 +157,103 @@ func TestChatKeysAndMouseButtonsInNarrowLayout(t *testing.T) {
 	a.mouse("<MouseLeft>", b.left, b.top)
 	if a.composing {
 		t.Fatal("Files button did not exit chat")
+	}
+}
+
+func TestEnterDownloadsFileWithoutFlagging(t *testing.T) {
+	a := testBBS(3, 90, 28)
+	if a.key("<Enter>") || a.composing {
+		t.Fatal("Enter should download selected file, not enter chat")
+	}
+	if a.status != "No active connection" || len(a.flagged) != 0 {
+		t.Fatalf("Enter did not initiate single file without flags: %q %+v", a.status, a.flagged)
+	}
+}
+
+func TestFolderNavigationAndPreserveFlags(t *testing.T) {
+	a := testBBS(0, 110, 29)
+	a.files = []wire.File{
+		{ID: "folder-a", Name: "alpha", IsDir: true},
+		{ID: "folder-empty", Name: "empty", IsDir: true},
+		{ID: "folder-nested", Name: "alpha/nested", IsDir: true},
+		{ID: "a", Name: "alpha/first.bin", Size: 10},
+		{ID: "b", Name: "alpha/nested/second.bin", Size: 20},
+		{ID: "r", Name: "root.txt", Size: 4},
+	}
+	a.rebuildEntries("")
+	if len(a.entries) != 3 || a.entries[0].file.Name != "alpha" ||
+		a.entries[1].file.Name != "empty" || a.entries[2].file.Name != "root.txt" {
+		t.Fatalf("root directories should be first: %+v", a.entries)
+	}
+	a.key("<Space>") // cannot flag a directory
+	if len(a.flagged) != 0 {
+		t.Fatal("directory was flagged")
+	}
+	a.key("<Enter>") // alpha
+	if a.dir != "alpha" || len(a.entries) != 3 || !a.entries[0].parent ||
+		a.entries[1].file.Name != "alpha/nested" || a.entries[2].file.Name != "alpha/first.bin" {
+		t.Fatalf("alpha directory listing wrong: dir=%q entries=%+v", a.dir, a.entries)
+	}
+	a.key("<End>") // first.bin
+	a.key("<Space>")
+	if !a.flagged["a"] {
+		t.Fatal("file in subfolder was not flagged")
+	}
+	a.key("<Home>")
+	a.key("<Enter>") // .. -> root, highlights alpha
+	if a.dir != "" || a.entries[a.cursor].file.Name != "alpha" {
+		t.Fatalf("parent navigation lost folder selection: dir=%q cursor=%d", a.dir, a.cursor)
+	}
+	a.key("<Down>") // empty
+	a.key("<Enter>")
+	if a.dir != "empty" || len(a.entries) != 1 || !a.entries[0].parent {
+		t.Fatalf("empty folder not navigable: dir=%q entries=%+v", a.dir, a.entries)
+	}
+	a.key("<Escape>") // also goes up in file mode
+	if a.dir != "" || !a.flagged["a"] {
+		t.Fatal("going back cleared the flags")
+	}
+	a.key("<Down>") // root.txt
+	a.key("<Space>")
+	queue := a.queued()
+	if len(queue) != 2 || queue[0].Name != "alpha/first.bin" || queue[1].Name != "root.txt" {
+		t.Fatalf("cross-folder batch queue incorrect: %+v", queue)
+	}
+	// Move into nested folder: parent Backspace should restore last folder.
+	a.key("<Home>")
+	a.key("<Enter>") // alpha
+	a.key("<Enter>") // nested
+	if a.dir != "alpha/nested" {
+		t.Fatalf("nested Enter navigation failed: %s", a.dir)
+	}
+	a.key("<Backspace>")
+	if a.dir != "alpha" || a.entries[a.cursor].file.Name != "alpha/nested" {
+		t.Fatalf("Backspace did not restore folder selection: dir=%q", a.dir)
+	}
+}
+
+func TestBrowserLargeNestedFolderScrollAndRefresh(t *testing.T) {
+	a := testBBS(0, 120, 30)
+	for i := 0; i < 1800; i++ {
+		a.files = append(a.files, wire.File{ID: fmt.Sprint(i), Name: fmt.Sprintf("huge/file%04d.txt", i)})
+	}
+	a.rebuildEntries("")
+	if len(a.entries) != 1 || !a.entries[0].file.IsDir {
+		t.Fatal("nested directory was not synthesized")
+	}
+	a.key("<Enter>")
+	a.key("<End>")
+	if a.scroll != len(a.entries)-a.layout.fileRows || a.cursor != len(a.entries)-1 {
+		t.Fatalf("scroll failed after entering huge directory: scroll=%d cursor=%d", a.scroll, a.cursor)
+	}
+	oldName := a.entries[a.cursor].file.Name
+	a.message(wire.Message{Type: "files", Files: a.files})
+	if a.entries[a.cursor].file.Name != oldName || a.dir != "huge" {
+		t.Fatal("refresh lost nested-directory selection")
+	}
+	a.key("<Home>")
+	if !a.entries[a.cursor].parent {
+		t.Fatal("Home should select parent directory row")
 	}
 }
 

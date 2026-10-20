@@ -99,7 +99,7 @@ type manifest struct {
 // Download retries interrupted TLS sessions, reopening the part file at its
 // verified offset. Interrupted downloads remain on disk between program runs.
 func Download(ctx context.Context, code invite.Code, entry wire.File, dest string, notify func(Progress)) error {
-	if !filepath.IsLocal(filepath.FromSlash(entry.Name)) || entry.Size < 0 || entry.ID == "" {
+	if entry.IsDir || !filepath.IsLocal(filepath.FromSlash(entry.Name)) || entry.Size < 0 || entry.ID == "" {
 		return errors.New("unsafe or invalid remote filename")
 	}
 	if dest == "" {
