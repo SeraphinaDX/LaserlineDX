@@ -38,13 +38,16 @@ func TestBatchDownloadsMultipleFlaggedFiles(t *testing.T) {
 	defer client.Close()
 	dest := t.TempDir()
 	a := &bbs{ctx: ctx, client: client, files: welcome.Files, flagged: map[string]bool{},
-		downloads: dest, progress: make(chan transfer.Progress, 32), completed: make(chan batchResult, 1)}
+		downloads: dest, progress: make(chan downloadEvent, 32), completed: make(chan batchResult, 1)}
 	for _, f := range a.files {
 		if f.Name != "skip.txt" {
 			a.flagged[f.ID] = true
 		}
 	}
 	a.downloadFlagged()
+	if !a.download.active || a.download.count != 2 || a.download.batchBytes != int64(len("hello one.txt")+len("hello two.txt")) {
+		t.Fatalf("batch status was not initialized: %+v", a.download)
+	}
 	select {
 	case result := <-a.completed:
 		if result.err != nil || len(result.succeeded) != 2 || result.total != 2 {
@@ -52,6 +55,19 @@ func TestBatchDownloadsMultipleFlaggedFiles(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("timed out downloading flagged files")
+	}
+	// The transfer layer should report progress with batch positions so the
+	// UI can show separate file and aggregate progress bars.
+	seen := make(map[int]bool)
+	for len(a.progress) != 0 {
+		e := <-a.progress
+		if e.index < 1 || e.index > 2 {
+			t.Fatalf("invalid batch progress position: %+v", e)
+		}
+		seen[e.index] = true
+	}
+	if !seen[1] || !seen[2] {
+		t.Fatalf("missing batch progress events: %v", seen)
 	}
 	for _, name := range []string{"one.txt", "two.txt"} {
 		content, err := os.ReadFile(filepath.Join(dest, name))

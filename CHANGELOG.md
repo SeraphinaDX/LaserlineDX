@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 — Download progress and dedicated transfer status
+
+- Made **Space** the sole keyboard shortcut for flagging/unflagging files; removed F/f for that purpose. Right-click flagging remains available.
+- Added a persistent **TRANSFER STATUS** pane beneath the files/chat area.
+- Added an updating per-file progress bar, percentage, current filename, amount downloaded, and current transfer speed.
+- Added overall batch progress and a separate batch progress bar, as well as the batch position and transfer attempt number.
+- Status continues to show reconnect/retry messages and reports success or a paused batch after completion or failure.
+- Kept file-list scrolling and mouse hit testing aligned with the resized file viewport at all supported terminal heights.
+- Added tests for the new keyboard mapping, progress display, retry/transfer transitions, and responsive layout.
+
 ## 0.2.0 — Mouse controls and batch file selection
 
 - Added mouse selection, right-click file flagging, and mouse-wheel scrolling in the file area.

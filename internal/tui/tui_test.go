@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	ui "github.com/metaspartan/gotui/v5"
 	"github.com/metaspartan/gotui/v5/widgets"
 
+	"warp/internal/transfer"
 	"warp/internal/wire"
 )
 
@@ -21,7 +23,7 @@ func testBBS(count, width, height int) *bbs {
 }
 
 func TestLargeListViewportAndKeyboard(t *testing.T) {
-	a := testBBS(2500, 120, 30) // 18 visible file rows
+	a := testBBS(2500, 120, 30) // file viewport accounts for the status panel
 	for i := 0; i < 999; i++ {
 		a.key("<Down>")
 	}
@@ -83,9 +85,9 @@ func TestMouseHitTestingAndFlaggingScrolledFiles(t *testing.T) {
 
 func TestFlagQueueAndRefresh(t *testing.T) {
 	a := testBBS(20, 80, 25)
-	a.key("F")
+	a.key("<Space>")
 	a.key("<Down>")
-	a.key("f")
+	a.key(" ")
 	a.key("<Down>")
 	a.key("<Space>")
 	if len(a.flagged) != 3 {
@@ -130,8 +132,13 @@ func TestChatKeysAndMouseButtonsInNarrowLayout(t *testing.T) {
 	}
 	a.layout = makeLayout(50, 24, false)
 	a.key("F")
+	a.key("f")
+	if len(a.flagged) != 0 {
+		t.Fatal("F/f must not flag files after leaving chat")
+	}
+	a.key("<Space>")
 	if !a.flagged[a.files[0].ID] {
-		t.Fatal("F did not work after leaving chat")
+		t.Fatal("Space did not flag after leaving chat")
 	}
 	b := a.layout.buttons[0]
 	a.mouse("<MouseLeft>", b.left, b.top)
@@ -149,5 +156,91 @@ func TestChatKeysAndMouseButtonsInNarrowLayout(t *testing.T) {
 	a.mouse("<MouseLeft>", b.left, b.top)
 	if a.composing {
 		t.Fatal("Files button did not exit chat")
+	}
+}
+
+func TestSpaceOnlyFlagsFilesAndFIsUnbound(t *testing.T) {
+	a := testBBS(2, 80, 25)
+	a.key("f")
+	a.key("F")
+	if len(a.flagged) != 0 {
+		t.Fatal("F/f must not flag a file")
+	}
+	a.key("<Space>")
+	if !a.flagged[a.files[0].ID] {
+		t.Fatal("Space did not flag file")
+	}
+	a.key(" ")
+	if len(a.flagged) != 0 {
+		t.Fatal("Space did not unflag file")
+	}
+}
+
+func TestStatusPanelGeometryAcrossTerminalSizes(t *testing.T) {
+	for _, dims := range [][2]int{{40, 16}, {50, 20}, {80, 24}, {120, 30}, {150, 40}} {
+		l := makeLayout(dims[0], dims[1], false)
+		if l.fileRows < 1 || l.files.bottom != l.transfer.top || l.transfer.bottom != l.prompt.top ||
+			l.transfer.bottom-l.transfer.top < 3 {
+			t.Fatalf("invalid geometry for %v: %+v", dims, l)
+		}
+		if l.files.bottom-l.files.top-2 != l.fileRows {
+			t.Fatalf("viewport height mismatched file pane: %v, %+v", dims, l)
+		}
+		text := downloadPanelText(downloadStatus{active: true, name: "data.txt", count: 4, index: 2,
+			bytes: 100, total: 200, batchBytes: 800, completedBytes: 200, message: "Receiving encrypted file"},
+			l.transfer.right-l.transfer.left-2, l.transfer.bottom-l.transfer.top-2)
+		if got := len(strings.Split(text, "\n")); got > l.transfer.bottom-l.transfer.top-2 {
+			t.Fatalf("status pane too tall for %v: %d lines", dims, got)
+		}
+		for _, line := range strings.Split(text, "\n") {
+			if len([]rune(line)) > l.transfer.right-l.transfer.left-2 {
+				t.Fatalf("status line exceeds width for %v: %q", dims, line)
+			}
+		}
+	}
+}
+
+func TestDownloadStatusProgressAndResumption(t *testing.T) {
+	a := &bbs{download: downloadStatus{active: true, count: 3, batchBytes: 600}}
+	start := time.Unix(123, 0)
+	a.observeDownload(downloadEvent{Progress: transfer.Progress{Name: "folder/a.txt", Bytes: 50, Total: 200, Attempt: 1,
+		Message: "Receiving encrypted file"}, index: 1}, start)
+	a.observeDownload(downloadEvent{Progress: transfer.Progress{Name: "folder/a.txt", Bytes: 150, Total: 200, Attempt: 1,
+		Message: "Receiving encrypted file"}, index: 1}, start.Add(time.Second))
+	if a.download.speed != 100 || percentage(a.download.bytes, a.download.total) != 75 {
+		t.Fatalf("incorrect current-file speed and percent: %+v", a.download)
+	}
+	if pct := percentage(a.download.completedBytes+a.download.bytes, a.download.batchBytes); pct != 25 {
+		t.Fatalf("wrong batch percentage: %d", pct)
+	}
+	// The transfer layer reports Interrupted notices without Bytes. The
+	// progress bar must not jump from 75%% to 0%% while reconnecting.
+	a.observeDownload(downloadEvent{Progress: transfer.Progress{Name: "folder/a.txt", Total: 200, Attempt: 1,
+		Message: "Interrupted: connection reset"}, index: 1}, start.Add(2*time.Second))
+	if a.download.bytes != 150 || a.download.speed != 0 {
+		t.Fatalf("interruption lost current-file progress: %+v", a.download)
+	}
+	// Resumed chunks count without duplicating the already downloaded prefix.
+	a.observeDownload(downloadEvent{Progress: transfer.Progress{Name: "folder/a.txt", Bytes: 150, Total: 200, Attempt: 2,
+		Message: "Receiving encrypted file"}, index: 1}, start.Add(3*time.Second))
+	a.observeDownload(downloadEvent{Progress: transfer.Progress{Name: "folder/b.txt", Bytes: 50, Total: 200, Attempt: 1,
+		Message: "Receiving encrypted file"}, index: 2, completedBytes: 200}, start.Add(4*time.Second))
+	if a.download.speed != 0 || a.download.bytes != 50 || a.download.completedBytes != 200 {
+		t.Fatalf("file transition did not reset speed and roll up bytes: %+v", a.download)
+	}
+	panel := downloadPanelText(a.download, 100, 5)
+	for _, expected := range []string{"folder/b.txt", "Batch  41%", "File  25%", "attempt 1", "Receiving encrypted file"} {
+		if !strings.Contains(panel, expected) {
+			t.Errorf("missing %q in panel:\n%s", expected, panel)
+		}
+	}
+}
+
+func TestProgressBarClamping(t *testing.T) {
+	if percentage(1000, 100) != 100 || percentage(-1, 100) != 0 {
+		t.Fatal("percentage did not clamp")
+	}
+	if progressBar(50, 100, 10) != "[#####-----]" {
+		t.Fatalf("wrong half-filled progress bar: %q", progressBar(50, 100, 10))
 	}
 }

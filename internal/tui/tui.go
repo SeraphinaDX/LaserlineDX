@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	ui "github.com/metaspartan/gotui/v5"
@@ -23,11 +24,11 @@ func (r area) contains(x, y int) bool {
 }
 
 type layout struct {
-	files, chat, prompt area
-	buttons             [3]area // Download All, Chat, Files
-	fileRows            int
-	filesVisible        bool
-	wide                bool
+	files, chat, prompt, transfer area
+	buttons                       [3]area // Download All, Chat, Files
+	fileRows                      int
+	filesVisible                  bool
+	wide                          bool
 }
 
 // The same geometry powers both rendering and mouse hit testing. Each file
@@ -39,16 +40,32 @@ func makeLayout(width, height int, composing bool) layout {
 		fileRight = width * 45 / 100
 	}
 	barY := height - 3 // content row inside the three-cell footer block
+	// Reserve a separate transfer-status panel without letting the file
+	// viewport disappear on small terminals. All panes use the same bounds
+	// for rendering and mouse hit testing.
+	transferHeight := 3
+	switch {
+	case height >= 32:
+		transferHeight = 7
+	case height >= 25:
+		transferHeight = 6
+	case height >= 21:
+		transferHeight = 5
+	case height >= 18:
+		transferHeight = 4
+	}
+	transferTop := height - 7 - transferHeight
 	l := layout{
-		files:        area{0, 3, fileRight, height - 7},
-		chat:         area{fileRight, 3, width, height - 7},
+		files:        area{0, 3, fileRight, transferTop},
+		chat:         area{fileRight, 3, width, transferTop},
+		transfer:     area{0, transferTop, width, height - 7},
 		prompt:       area{0, height - 7, width, height - 4},
-		fileRows:     max(1, height-12),
+		fileRows:     max(1, transferTop-5),
 		filesVisible: wide || !composing,
 		wide:         wide,
 	}
 	if !wide {
-		l.chat = area{0, 3, width, height - 7}
+		l.chat = area{0, 3, width, transferTop}
 	}
 	labels := [...]string{"[ Download All ]", "[ Chat ]", "[ Files ]"}
 	for i, label := range labels {
@@ -61,8 +78,69 @@ func makeLayout(width, height int, composing bool) layout {
 type batchResult struct {
 	succeeded []string
 	total     int
+	lastName  string
+	lastSize  int64
 	failed    string
 	err       error
+}
+
+// downloadEvent carries the batch position separately from the transfer
+// message so UI progress does not depend on parsing human-readable strings.
+type downloadEvent struct {
+	transfer.Progress
+	index          int // 1-based index in the batch
+	completedBytes int64
+}
+
+// downloadStatus is owned exclusively by the TUI event loop. The transfer
+// goroutine only sends events and never edits a widget or the status model.
+type downloadStatus struct {
+	active         bool
+	name           string
+	bytes, total   int64
+	batchBytes     int64
+	completedBytes int64
+	index, count   int
+	attempt        int
+	message        string
+	speed          float64 // bytes per second during this attempt
+	lastBytes      int64
+	lastSample     time.Time
+}
+
+func (a *bbs) observeDownload(e downloadEvent, now time.Time) {
+	d := &a.download
+	newAttempt := e.index != d.index || e.Attempt != d.attempt
+	if newAttempt {
+		d.lastSample = time.Time{}
+		d.speed = 0
+	}
+	if e.Name != "" {
+		d.name = e.Name
+	}
+	d.index = e.index
+	d.attempt = e.Attempt
+	d.total = max64(0, e.Total)
+	d.completedBytes = e.completedBytes
+	if e.Message != "" {
+		d.message = e.Message
+	}
+	// A retry/error notice has no byte offset. Keep the last known progress
+	// instead of jumping the bar backwards to zero during reconnects.
+	if strings.HasPrefix(e.Message, "Interrupted:") {
+		d.speed = 0
+		d.lastSample = time.Time{}
+		return
+	}
+	d.bytes = min64(d.total, max64(0, e.Bytes))
+	if !d.lastSample.IsZero() && d.bytes >= d.lastBytes {
+		secs := now.Sub(d.lastSample).Seconds()
+		if secs >= 0.1 {
+			d.speed = float64(d.bytes-d.lastBytes) / secs
+		}
+	}
+	d.lastBytes = d.bytes
+	d.lastSample = now
 }
 
 type bbs struct {
@@ -76,9 +154,10 @@ type bbs struct {
 	nick      string
 	people    int
 	status    string
-	progress  chan transfer.Progress
+	progress  chan downloadEvent
 	completed chan batchResult
 	busy      bool
+	download  downloadStatus
 	ctx       context.Context
 	client    *transfer.Client
 	downloads string
@@ -97,8 +176,8 @@ func Run(ctx context.Context, c *transfer.Client, welcome wire.Message, download
 	defer cancel()
 	a := &bbs{
 		ctx: ctx, client: c, files: welcome.Files, nick: welcome.Name, people: welcome.Users,
-		status:    "Connected securely (TLS 1.3). F flags files; D downloads flagged files.",
-		downloads: downloads, progress: make(chan transfer.Progress, 32), completed: make(chan batchResult, 1),
+		status:    "Connected securely (TLS 1.3). Space flags files; D downloads flagged files.",
+		downloads: downloads, progress: make(chan downloadEvent, 32), completed: make(chan batchResult, 1),
 		input: widgets.NewInput(), flagged: make(map[string]bool),
 	}
 	a.chat = append(a.chat, "Welcome to Warp! Your chat history is session-only.")
@@ -131,11 +210,7 @@ func Run(ctx context.Context, c *transfer.Client, welcome wire.Message, download
 			a.draw()
 			return nil
 		case p := <-a.progress:
-			percent := 100
-			if p.Total > 0 {
-				percent = int(p.Bytes * 100 / p.Total)
-			}
-			a.status = fmt.Sprintf("%s - %d%% (%d/%d bytes) %s", p.Name, percent, p.Bytes, p.Total, p.Message)
+			a.observeDownload(p, time.Now())
 			a.draw()
 		case result := <-a.completed:
 			// A buffered progress message from an earlier file must not
@@ -144,13 +219,22 @@ func Run(ctx context.Context, c *transfer.Client, welcome wire.Message, download
 				<-a.progress
 			}
 			a.busy = false
+			a.download.active = false
+			a.download.speed = 0
 			for _, id := range result.succeeded {
 				delete(a.flagged, id)
 			}
 			if result.err != nil {
+				a.download.message = "Paused: " + result.err.Error()
 				a.status = fmt.Sprintf("Downloaded %d/%d; stopped at %s: %v. Failed/remaining files stay flagged.",
 					len(result.succeeded), result.total, result.failed, result.err)
 			} else {
+				a.download.name = result.lastName
+				a.download.index = result.total
+				a.download.total = result.lastSize
+				a.download.bytes = result.lastSize
+				a.download.completedBytes = a.download.batchBytes - result.lastSize
+				a.download.message = "Finished: all files SHA-256 verified"
 				a.status = fmt.Sprintf("Downloaded %d file(s); SHA-256 verified.", result.total)
 			}
 			a.draw()
@@ -248,7 +332,7 @@ func (a *bbs) key(id string) bool {
 	case "<Enter>", "c", "t", "<Tab>":
 		a.composing = true
 		a.status = "Chat active. Enter sends your message; Escape returns to the files."
-	case "f", "F", "<Space>", " ":
+	case "<Space>", " ":
 		a.toggleFlag(a.cursor)
 	case "d", "D":
 		a.downloadFlagged()
@@ -402,7 +486,7 @@ func (a *bbs) downloadFlagged() {
 	}
 	queue := a.queued()
 	if len(queue) == 0 {
-		a.status = "Flag files using F or right-click first"
+		a.status = "Flag files using Space or right-click first"
 		return
 	}
 	if a.client == nil {
@@ -410,21 +494,37 @@ func (a *bbs) downloadFlagged() {
 		return
 	}
 	a.busy = true
+	var batchBytes int64
+	for _, item := range queue {
+		batchBytes += item.Size
+	}
+	a.download = downloadStatus{
+		active: true, name: queue[0].Name, total: queue[0].Size,
+		batchBytes: batchBytes, index: 1, count: len(queue),
+		message: "Connecting over TLS 1.3...",
+	}
 	a.status = fmt.Sprintf("Downloading %d flagged file(s) sequentially; interrupted files can resume.", len(queue))
 	go func() {
 		result := batchResult{total: len(queue)}
+		var completedBytes int64
 		for i, item := range queue {
-			err := transfer.Download(a.ctx, a.client.Invitation, item, a.downloads, func(p transfer.Progress) {
-				p.Message = fmt.Sprintf("[%d/%d] %s", i+1, len(queue), p.Message)
+			// Show the next file immediately, even if opening the stream takes
+			// a while. Deliver event updates without blocking network reads.
+			send := func(p transfer.Progress) {
+				e := downloadEvent{Progress: p, index: i + 1, completedBytes: completedBytes}
 				select {
-				case a.progress <- p:
+				case a.progress <- e:
 				default:
 				}
-			})
+			}
+			send(transfer.Progress{Name: item.Name, Total: item.Size, Message: "Connecting over TLS 1.3..."})
+			err := transfer.Download(a.ctx, a.client.Invitation, item, a.downloads, send)
 			if err != nil {
 				result.failed, result.err = item.Name, err
 				break // preserve failed and remaining flags for retry
 			}
+			completedBytes += item.Size
+			result.lastName, result.lastSize = item.Name, item.Size
 			result.succeeded = append(result.succeeded, item.ID)
 		}
 		select {
@@ -457,7 +557,7 @@ func (a *bbs) draw() {
 
 	foot := widgets.NewParagraph()
 	foot.BorderStyle.Fg = ui.ColorPink
-	foot.Title = " F: flag  D: download all  Enter: chat  Esc: files  PgUp/PgDn: scroll  q: quit "
+	foot.Title = " Space: flag  D: download all  Enter: chat  Esc: files  PgUp/PgDn: scroll  q: quit "
 	foot.Text = actionBar
 	foot.TextStyle.Fg = ui.ColorLightCyan
 	foot.SetRect(0, height-4, width, height-1)
@@ -465,6 +565,14 @@ func (a *bbs) draw() {
 	status.Text = " " + a.status
 	status.SetRect(0, height-1, width, height)
 	status.TextStyle.Fg = ui.ColorLightCyan
+
+	transferPanel := widgets.NewParagraph()
+	transferPanel.Title = " TRANSFER STATUS "
+	transferPanel.BorderStyle.Fg = ui.ColorPink
+	transferPanel.TextStyle.Fg = ui.ColorLightCyan
+	transferPanel.WrapText = false
+	transferPanel.Text = downloadPanelText(a.download, l.transfer.right-l.transfer.left-2, l.transfer.bottom-l.transfer.top-2)
+	transferPanel.SetRect(l.transfer.left, l.transfer.top, l.transfer.right, l.transfer.bottom)
 
 	list := widgets.NewList()
 	start := a.scroll
@@ -521,11 +629,11 @@ func (a *bbs) draw() {
 	}
 	ui.Clear()
 	if l.wide {
-		ui.Render(header, list, chat, prompt, foot, status)
+		ui.Render(header, list, chat, transferPanel, prompt, foot, status)
 	} else if a.composing {
-		ui.Render(header, chat, prompt, foot, status)
+		ui.Render(header, chat, transferPanel, prompt, foot, status)
 	} else {
-		ui.Render(header, list, prompt, foot, status)
+		ui.Render(header, list, transferPanel, prompt, foot, status)
 	}
 }
 func visibleStart(start, end int) int {
@@ -566,6 +674,94 @@ func max(a, b int) int {
 }
 func min(a, b int) int {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+// downloadPanelText formats a fixed-height status window. At 40 columns or on
+// short terminals it shortens intelligently instead of allowing wrapped lines
+// to obscure the progress bar or overflow into the file/chat panes.
+func downloadPanelText(d downloadStatus, width, rows int) string {
+	if width < 1 || rows < 1 {
+		return ""
+	}
+	if d.count == 0 {
+		return fitLine(" Idle - flag files with Space (or right-click), then press D.", width)
+	}
+	filePct := percentage(d.bytes, d.total)
+	batchDone := min64(d.batchBytes, max64(0, d.completedBytes+d.bytes))
+	batchPct := percentage(batchDone, d.batchBytes)
+	label := "Downloading"
+	if !d.active {
+		if strings.HasPrefix(d.message, "Paused:") {
+			label = "Paused"
+		} else {
+			label = "Complete"
+		}
+	}
+	lines := []string{
+		fmt.Sprintf(" %s [%d/%d] %s", label, d.index, d.count, safe(d.name)),
+		fmt.Sprintf(" File %3d%% %s", filePct, progressBar(d.bytes, d.total, max(8, min(42, width-14)))),
+		fmt.Sprintf(" Batch %3d%% %s", batchPct, progressBar(batchDone, d.batchBytes, max(8, min(42, width-15)))),
+		fmt.Sprintf(" %s / %s  |  %s/s  |  attempt %d", formatBytes(d.bytes), formatBytes(d.total), formatSpeed(d.speed), d.attempt),
+		" " + safe(d.message),
+	}
+	// One-line and two-line formats keep a progress bar visible in the
+	// smallest supported windows (16-19 rows tall).
+	if rows == 1 {
+		return fitLine(fmt.Sprintf(" %s %d/%d %3d%% %s", label, d.index, d.count, filePct,
+			progressBar(d.bytes, d.total, max(6, min(16, width-25)))), width)
+	}
+	if rows == 2 {
+		lines = []string{lines[0], lines[1]}
+	} else if rows == 3 {
+		lines = []string{lines[0], lines[1], lines[3]}
+	} else if rows == 4 {
+		lines = lines[:4]
+	}
+	for i, line := range lines {
+		lines[i] = fitLine(line, width)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func percentage(done, total int64) int {
+	if total <= 0 {
+		return 100
+	}
+	// Float conversion avoids overflow when multiplying very large file sizes.
+	return int(100 * (float64(min64(total, max64(0, done))) / float64(total)))
+}
+func progressBar(done, total int64, width int) string {
+	width = max(1, width)
+	fill := percentage(done, total) * width / 100
+	return "[" + strings.Repeat("#", fill) + strings.Repeat("-", width-fill) + "]"
+}
+func formatSpeed(bytesPerSecond float64) string {
+	if bytesPerSecond <= 0 {
+		return "0 B"
+	}
+	return formatBytes(int64(bytesPerSecond))
+}
+func fitLine(line string, width int) string {
+	characters := []rune(line)
+	if len(characters) <= width {
+		return line
+	}
+	if width <= 1 {
+		return string(characters[:width])
+	}
+	return string(characters[:width-1]) + "…"
+}
+func min64(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+func max64(a, b int64) int64 {
+	if a > b {
 		return a
 	}
 	return b
