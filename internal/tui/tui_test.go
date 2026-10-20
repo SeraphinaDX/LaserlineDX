@@ -185,9 +185,13 @@ func TestFolderNavigationAndPreserveFlags(t *testing.T) {
 		a.entries[1].file.Name != "empty" || a.entries[2].file.Name != "root.txt" {
 		t.Fatalf("root directories should be first: %+v", a.entries)
 	}
-	a.key("<Space>") // cannot flag a directory
-	if len(a.flagged) != 0 {
-		t.Fatal("directory was flagged")
+	a.key("<Space>") // tag alpha recursively
+	if !a.flaggedDirs["alpha"] {
+		t.Fatal("directory was not tagged")
+	}
+	a.key("<Space>") // untag it to continue with standalone file tags
+	if a.flaggedDirs["alpha"] {
+		t.Fatal("directory did not untag")
 	}
 	a.key("<Enter>") // alpha
 	if a.dir != "alpha" || len(a.entries) != 3 || !a.entries[0].parent ||
@@ -340,5 +344,141 @@ func TestProgressBarClamping(t *testing.T) {
 	}
 	if progressBar(50, 100, 10) != "[#####-----]" {
 		t.Fatalf("wrong half-filled progress bar: %q", progressBar(50, 100, 10))
+	}
+}
+
+func TestDoubleClickMouseNavigatesAndDownloads(t *testing.T) {
+	a := testBBS(0, 120, 28)
+	a.files = []wire.File{
+		{Name: "folder", ID: "dir", IsDir: true},
+		{Name: "folder/inside.txt", ID: "nested", Size: 8},
+		{Name: "root.txt", ID: "root", Size: 12},
+	}
+	a.rebuildEntries("")
+	l := a.layout
+	when := time.Unix(200, 0)
+	x, y := 5, l.files.top+1
+	a.mouseAt("<MouseLeft>", x, y, when)
+	if a.dir != "" {
+		t.Fatal("single click should only select")
+	}
+	a.mouseAt("<MouseRelease>", x, y, when.Add(50*time.Millisecond))
+	a.mouseAt("<MouseLeft>", x, y, when.Add(250*time.Millisecond))
+	if a.dir != "folder" {
+		t.Fatalf("double-click didn't open folder: %q", a.dir)
+	}
+	a.mouseAt("<MouseRelease>", x, y, when.Add(300*time.Millisecond))
+	// row 0 is parent, row 1 is the nested file.
+	a.mouseAt("<MouseLeft>", x, y+1, when.Add(time.Second))
+	a.mouseAt("<MouseRelease>", x, y+1, when.Add(time.Second+50*time.Millisecond))
+	a.mouseAt("<MouseLeft>", x, y+1, when.Add(time.Second+200*time.Millisecond))
+	if a.status != "No active connection" {
+		t.Fatalf("double-click file did not invoke the download path: %s", a.status)
+	}
+	if len(a.flagged) != 0 || len(a.flaggedDirs) != 0 {
+		t.Fatal("double click should not tag anything")
+	}
+}
+
+func TestDoubleClickDoesNotAccidentallyActivate(t *testing.T) {
+	a := testBBS(3, 110, 30)
+	l := a.layout
+	first := time.Unix(1000, 0)
+	x, y := 5, l.files.top+1
+	a.mouseAt("<MouseLeft>", x, y, first)
+	a.mouseAt("<MouseRelease>", x, y, first.Add(time.Millisecond))
+	a.mouseAt("<MouseLeft>", x, y+1, first.Add(90*time.Millisecond)) // changed row
+	if a.status == "No active connection" {
+		t.Fatal("different row activated")
+	}
+	a.mouseAt("<MouseRelease>", x, y+1, first.Add(100*time.Millisecond))
+	a.mouseAt("<MouseLeft>", x, y+1, first.Add(time.Second)) // too slow
+	if a.status == "No active connection" {
+		t.Fatal("late click activated")
+	}
+	a.mouseAt("<MouseRelease>", x, y+1, first.Add(time.Second+time.Millisecond))
+	a.mouseAt("<MouseRight>", x, y+1, first.Add(time.Second+30*time.Millisecond))
+	if !a.flagged[a.files[1].ID] {
+		t.Fatal("right click stopped tagging")
+	}
+	a.mouseAt("<MouseRelease>", x, y+1, first.Add(time.Second+35*time.Millisecond))
+	a.mouseAt("<MouseLeft>", x, y+1, first.Add(time.Second+100*time.Millisecond))
+	if a.status == "No active connection" {
+		t.Fatal("right click did not cancel click pair")
+	}
+	a.mouseAt("<MouseRelease>", x, y+1, first.Add(time.Second+120*time.Millisecond))
+	a.mouseAt("<MouseWheelDown>", x, y+1, first.Add(time.Second+130*time.Millisecond))
+	a.mouseAt("<MouseLeft>", x, y+1, first.Add(time.Second+180*time.Millisecond))
+	if a.status == "No active connection" {
+		t.Fatal("scroll did not cancel click pair")
+	}
+}
+
+func TestRecursiveTaggingDeduplicatesAndIncludesEmptyFolders(t *testing.T) {
+	a := testBBS(0, 120, 30)
+	a.files = []wire.File{
+		{ID: "base", Name: "books", IsDir: true},
+		{ID: "subdir", Name: "books/classics", IsDir: true},
+		{ID: "empty", Name: "books/empty", IsDir: true},
+		{ID: "book1", Name: "books/classics/one.txt", Size: 4},
+		{ID: "book2", Name: "books/two.txt", Size: 9},
+		{ID: "else", Name: "else.txt", Size: 3},
+	}
+	a.rebuildEntries("")
+	a.key("<Space>")
+	if !a.flaggedDirs["books"] {
+		t.Fatal("space did not tag folder")
+	}
+	a.key("<Enter>")
+	if !a.tagged(a.entries[1]) || !a.tagged(a.entries[2]) {
+		t.Fatalf("subdirectories should visibly inherit tags: %+v", a.entries)
+	}
+	a.key("<End>")
+	a.key("<Space>")
+	if !strings.Contains(a.status, "tagged parent") {
+		t.Fatalf("expected inherited-tag guidance: %s", a.status)
+	}
+	a.flagged["book1"] = true // independently flagged earlier file must appear just once
+	q := a.queued()
+	want := []string{"books", "books/classics", "books/classics/one.txt", "books/empty", "books/two.txt"}
+	if len(q) != len(want) {
+		t.Fatalf("wrong recursive expansion: %+v", q)
+	}
+	for i, f := range q {
+		if f.Name != want[i] {
+			t.Fatalf("queue[%d] = %q, expected %q", i, f.Name, want[i])
+		}
+	}
+	// Untag from the root. The explicitly tagged file remains selected.
+	a.key("<Backspace>")
+	a.key("<Space>")
+	q = a.queued()
+	if len(q) != 1 || q[0].ID != "book1" {
+		t.Fatalf("untagging folder erased independent tag: %+v", q)
+	}
+}
+
+func TestRightClickTagsFoldersAndDoubleClickParent(t *testing.T) {
+	a := testBBS(0, 110, 29)
+	a.files = []wire.File{{Name: "dir", IsDir: true}, {ID: "file", Name: "dir/file"}}
+	a.rebuildEntries("")
+	x, y := 5, a.layout.files.top+1
+	a.mouseAt("<MouseRight>", x, y, time.Unix(1, 0))
+	if !a.flaggedDirs["dir"] {
+		t.Fatal("right-click must tag directory")
+	}
+	a.mouseAt("<MouseRelease>", x, y, time.Unix(1, 0))
+	a.mouseAt("<MouseLeft>", x, y, time.Unix(2, 0))
+	a.mouseAt("<MouseRelease>", x, y, time.Unix(2, 0))
+	a.mouseAt("<MouseLeft>", x, y, time.Unix(2, 0).Add(100*time.Millisecond))
+	if a.dir != "dir" {
+		t.Fatal("double click did not open tagged directory")
+	}
+	a.mouseAt("<MouseRelease>", x, y, time.Unix(2, 0).Add(150*time.Millisecond))
+	a.mouseAt("<MouseLeft>", x, y, time.Unix(3, 0)) // parent
+	a.mouseAt("<MouseRelease>", x, y, time.Unix(3, 0).Add(10*time.Millisecond))
+	a.mouseAt("<MouseLeft>", x, y, time.Unix(3, 0).Add(150*time.Millisecond))
+	if a.dir != "" {
+		t.Fatalf("double-click parent failed, dir %q", a.dir)
 	}
 }

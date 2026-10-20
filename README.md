@@ -1,11 +1,17 @@
 # Warp
 
-Warp is a tiny, encrypted multi-user **file-sharing BBS** written in Go. The client
-uses [gotui v5](https://github.com/metaspartan/gotui) to browse files and chat.
-It is a direct-connect Croc alternative: no accounts, no environment-variable
-configuration, and no third-party server required.
+Warp is a tiny, encrypted, multi-user **BBS-like file-sharing and chat tool**
+written in Go. It offers the **file area and live chat of a miniature BBS-like
+experience**, without claiming to be a full bulletin board system. The terminal
+client uses [gotui v5](https://github.com/metaspartan/gotui). Warp is a
+direct-connect alternative to Croc: no accounts, no environment-variable
+configuration, and no third-party relay required.
 
-**Status: 0.4.0 experimental source release.** The protocol has not undergone
+**Warp is not a full BBS:** there are no message boards, user accounts, doors,
+forums, persistent chat archives, or remote uploads. It concentrates on
+encrypted downloads, browsing shared folders, and ephemeral group chat.
+
+**Status: 0.5.0 experimental source release.** The protocol has not undergone
 an independent security audit. Do not treat it as a hardened public file server.
 
 ## Build
@@ -34,15 +40,23 @@ Another user enters:
 warp connect W1-PASTE_THE_FULL_CODE_HERE
 ```
 
-In the BBS, use **Up/Down** or **j/k** to move through entries, or **PageUp**, **PageDown**, **Home** and **End** for large directories. The current directory appears in the file pane's title, and the list scrolls with the selected row. Mouse-wheel scrolling also works over the file area. Folders are listed before files and marked `[DIR]`, and even empty shared folders appear in the listing.
+In the BBS-like file area, use **Up/Down** or **j/k** to move through entries, or **PageUp**, **PageDown**, **Home** and **End** for large directories. The current directory appears in the file pane's title, and the list scrolls with the selected row. Mouse-wheel scrolling also works over the file area. Folders are listed before files and marked `[DIR]`, and even empty shared folders appear in the listing.
 
 - **Enter** opens a selected **directory** or begins downloading the selected **file** immediately, without needing to flag it first. File downloads use the same resume and checksum checks as batch downloads.
 - **`[..] Parent directory`** is at the top of every non-root folder. Highlight it and press **Enter** to go back, or use **Backspace** or **Escape** while browsing files. Leaving a folder selects it in its parent, so it's easy to browse nearby folders.
-- **Space** toggles a flag on a selected **file only**. Flagged files show `[x]`; folders cannot be flagged. Flagged selections are preserved while browsing into or out of folders. **F/f does not flag files**.
-- **D** (or **d**) downloads **all flagged files**, including files flagged in other folders, in alphabetical listing order. Click **[ Download All ]** in the bottom action bar to do the same with the mouse.
-- **Left-click** a file or directory row to select it; **right-click** a file row to flag/unflag it. Mouse hit testing follows the visible scrolling viewport.
+- **Space** tags/untags the selected **file or directory**. Tagged items show `[x]`. A tagged directory includes every file and subdirectory inside it, including empty directories; tagged descendants also show `[x]`. To exclude an item inherited from a tagged folder, untag its parent first. Existing independent file tags are not discarded when a folder is untagged. **F/f does not tag anything**.
+- **D** (or **d**) downloads everything tagged: individual files **and entire directories**, recursively. The original relative folder structure is kept, including empty folders. Overlapping tags are deduplicated. Click **[ Download All ]** in the bottom action bar for the same action with a mouse.
+- **Single left-click** selects a row; **double left-click** opens a directory (or `[..]` to go up), or starts the resumable download of a single file. **Right-click** toggles tags on files **and directories**. Mouse-wheel scrolling and hit testing follow the visible file viewport; the two clicks must be on the same row within 450 ms. Double-click never tags a file.
 - **Tab** opens the **encrypted chat prompt**. **Enter** while composing sends the message; **Escape** leaves chat and returns to file navigation. You can also click **[ Chat ]**, **[ Files ]**, or the chat prompt area.
 - **r** refreshes the file listing; flags survive a refresh when the exact file version remains available. **q** disconnects from file-navigation mode; **Ctrl+C** always quits.
+
+### Warp's retro terminal palette
+
+Warp's gotui interface uses **plasma violet borders**, **electric cyan file
+panes**, **hot-pink chat and transfer outlines**, **gold selections and titles**,
+and a **midnight-blue background**. This neon, BBS-inspired palette is part of
+the regular client UI (not a special terminal theme to install). Truecolor
+terminals show the full palette; other terminals may approximate the colours.
 
 The file pane and chat pane are side by side on wide terminals (92+ columns). On narrower terminals, Tab/chat switches the main pane between files and chat. A dedicated **TRANSFER STATUS** window is visible under the file/chat area while idle and during downloads. It shows the current filename, progress bar and percentage, overall batch progress, downloaded bytes, current transfer speed, retry attempt and transfer/reconnect status. Smaller terminals use a compact version of the window to keep the file list usable. The minimum terminal size is 40 columns by 16 rows. A terminal with mouse reporting enabled is needed for pointer actions (gotui enables this by default).
 
@@ -67,7 +81,7 @@ sharing directory if you don't want to expose unrelated files.
 
 The server now includes directory entries in the initial listing and on
 refresh, including empty directories. **Update both the serving and connecting
-Warp installations to 0.4.0 together.** Older clients do not understand the
+Warp installations to 0.4.0 or newer together.** Older clients do not understand the
 new directory indicator and may attempt to download a folder.
 
 ### Over the internet
@@ -102,7 +116,15 @@ listening port is **TCP 47477**.
 
 ## Reliable transfers
 
-Flagged downloads are queued sequentially, rather than started all at once. Pressing Enter on a file starts a single download using that same machinery. The status window stays visible during transfers, including while chatting, and updates as encrypted file blocks arrive. A successful file is removed from the flagged selection (if flagged); if one fails, the batch pauses and that file and the unattempted files remain flagged so you can retry them. Your flag selections are only kept for the current connection, but the on-disk partial files survive reconnects.
+Tagged downloads are queued sequentially, rather than started all at once.
+Pressing Enter or double-clicking a file starts a single download using that same
+machinery. Tagged folders expand into a batch of all nested files and folders;
+empty folders are created locally too. Each transferred file goes through TLS
+1.3 and SHA-256 verification. The status window remains visible during
+transfers, including while chatting. If a batch fails partway through, the
+unfinished entries are tagged individually so retrying won't try to overwrite
+already completed downloads. Tags last for the current connection, but on-disk
+partial files survive reconnects.
 
 Warp downloads to `filename.warp-part` and writes a nearby JSON metadata file.
 If the connection drops, Warp retries up to four times automatically; on

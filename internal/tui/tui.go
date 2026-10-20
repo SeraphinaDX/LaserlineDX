@@ -1,4 +1,4 @@
-// Package tui provides Warp's gotui v5 mini-BBS for terminal clients.
+// Package tui provides Warp's gotui v5 BBS-like file and chat terminal client.
 package tui
 
 import (
@@ -18,6 +18,26 @@ import (
 )
 
 const actionBar = " [ Download All ]  [ Chat ]  [ Files ]"
+
+// Warp's neon terminal palette: violet plasma, hot-pink accents, cyan signal
+// lines and gold highlights on a dark-space background. RGB colors are
+// downgraded by the terminal backend when truecolor is unavailable.
+var (
+	warpViolet = ui.NewRGBColor(161, 83, 255)
+	warpPink   = ui.NewRGBColor(255, 72, 170)
+	warpCyan   = ui.NewRGBColor(78, 232, 244)
+	warpGold   = ui.NewRGBColor(255, 209, 99)
+	warpInk    = ui.NewRGBColor(12, 14, 39)
+	warpWhite  = ui.NewRGBColor(228, 235, 254)
+)
+
+const doubleClickInterval = 450 * time.Millisecond
+
+type clickStamp struct {
+	name string
+	dir  string
+	at   time.Time
+}
 
 type area struct{ left, top, right, bottom int }
 
@@ -78,12 +98,16 @@ func makeLayout(width, height int, composing bool) layout {
 }
 
 type batchResult struct {
-	succeeded []string
-	total     int
-	lastName  string
-	lastSize  int64
-	failed    string
-	err       error
+	succeeded  []string
+	total      int
+	lastName   string
+	lastSize   int64
+	failed     string
+	remaining  []wire.File
+	taggedDirs []string
+	filesDone  int
+	dirsDone   int
+	err        error
 }
 
 // downloadEvent carries the batch position separately from the transfer
@@ -110,7 +134,8 @@ type downloadStatus struct {
 	lastSample     time.Time
 }
 
-// A directory is a navigable row, not a downloadable file. The parent row
+// Directories can be tagged for a recursive batch download, but Enter on a
+// directory always navigates into it. The parent row
 // is synthetic; real directories (including empty ones) come from the server.
 // Synthesizing intermediate folders also handles older servers whose listing
 // only contained files, without changing the underlying download IDs.
@@ -212,27 +237,29 @@ func (a *bbs) observeDownload(e downloadEvent, now time.Time) {
 }
 
 type bbs struct {
-	files     []wire.File
-	entries   []browserEntry // only the rows in the current directory
-	dir       string         // slash-separated path relative to the share root
-	cursor    int
-	scroll    int
-	flagged   map[string]bool // stable file ID, not row number
-	chat      []string
-	composing bool
-	input     *widgets.Input
-	nick      string
-	people    int
-	status    string
-	progress  chan downloadEvent
-	completed chan batchResult
-	busy      bool
-	download  downloadStatus
-	ctx       context.Context
-	client    *transfer.Client
-	downloads string
-	layout    layout
-	heldMouse string // avoid repeated toggles from held/dragged right-clicks
+	files       []wire.File
+	entries     []browserEntry // only the rows in the current directory
+	dir         string         // slash-separated path relative to the share root
+	cursor      int
+	scroll      int
+	flagged     map[string]bool // stable file ID, not row number
+	flaggedDirs map[string]bool // directory path, recursively includes descendants
+	chat        []string
+	composing   bool
+	input       *widgets.Input
+	nick        string
+	people      int
+	status      string
+	progress    chan downloadEvent
+	completed   chan batchResult
+	busy        bool
+	download    downloadStatus
+	ctx         context.Context
+	client      *transfer.Client
+	downloads   string
+	layout      layout
+	heldMouse   string     // avoid repeated toggles from held/dragged right-clicks
+	lastClick   clickStamp // double-click works on the same visible row only
 }
 
 // Run owns the terminal and all widget rendering. Network goroutines send
@@ -246,11 +273,11 @@ func Run(ctx context.Context, c *transfer.Client, welcome wire.Message, download
 	defer cancel()
 	a := &bbs{
 		ctx: ctx, client: c, files: welcome.Files, nick: welcome.Name, people: welcome.Users,
-		status:    "Connected securely (TLS 1.3). Enter opens/downloads, Tab chats, Space flags, D downloads flagged.",
+		status:    "TLS 1.3 linked. Double-click/Enter: open or get. Space/right-click: tag. D: download all.",
 		downloads: downloads, progress: make(chan downloadEvent, 32), completed: make(chan batchResult, 1),
-		input: widgets.NewInput(), flagged: make(map[string]bool),
+		input: widgets.NewInput(), flagged: make(map[string]bool), flaggedDirs: make(map[string]bool),
 	}
-	a.chat = append(a.chat, "Welcome to Warp! Your chat history is session-only.")
+	a.chat = append(a.chat, "Welcome to Warp's BBS-like file area and live chat. Chat is session-only.")
 	a.rebuildEntries("")
 	a.draw()
 	events := ui.PollEventsWithContext(ctx)
@@ -295,18 +322,32 @@ func Run(ctx context.Context, c *transfer.Client, welcome wire.Message, download
 			for _, id := range result.succeeded {
 				delete(a.flagged, id)
 			}
+			// A tagged parent expands into concrete entries. Once any item
+			// fails, convert the unfinished portion into individual tags so
+			// retry won't attempt to overwrite files already downloaded.
+			for _, dir := range result.taggedDirs {
+				delete(a.flaggedDirs, dir)
+			}
+			for _, f := range result.remaining {
+				if f.IsDir {
+					a.ensureDirFlags()
+					a.flaggedDirs[f.Name] = true
+				} else {
+					a.flagged[f.ID] = true
+				}
+			}
 			if result.err != nil {
 				a.download.message = "Paused: " + result.err.Error()
-				a.status = fmt.Sprintf("Downloaded %d/%d; stopped at %s: %v. Failed/remaining files stay flagged.",
-					len(result.succeeded), result.total, result.failed, result.err)
+				a.status = fmt.Sprintf("Completed %d/%d items; paused at %s: %v. Remaining items stay tagged.",
+					result.filesDone+result.dirsDone, result.total, result.failed, result.err)
 			} else {
 				a.download.name = result.lastName
 				a.download.index = result.total
 				a.download.total = result.lastSize
 				a.download.bytes = result.lastSize
 				a.download.completedBytes = a.download.batchBytes - result.lastSize
-				a.download.message = "Finished: all files SHA-256 verified"
-				a.status = fmt.Sprintf("Downloaded %d file(s); SHA-256 verified.", result.total)
+				a.download.message = "Finished: files SHA-256 verified; folders created"
+				a.status = fmt.Sprintf("Downloaded %d file(s), prepared %d folder(s); SHA-256 verified.", result.filesDone, result.dirsDone)
 			}
 			a.draw()
 		}
@@ -327,6 +368,11 @@ func (a *bbs) message(m wire.Message) {
 		for id := range a.flagged {
 			if !live[id] {
 				delete(a.flagged, id)
+			}
+		}
+		for dir := range a.flaggedDirs {
+			if !directoryExists(a.files, dir) {
+				delete(a.flaggedDirs, dir)
 			}
 		}
 		// A removed directory is no longer a viable browsing location.
@@ -381,6 +427,7 @@ func (a *bbs) rebuildEntries(selectName string) {
 }
 
 func (a *bbs) browse(dir, selectName string) {
+	a.lastClick = clickStamp{}
 	a.dir, a.scroll = dir, 0
 	a.rebuildEntries(selectName)
 	if dir != "" && selectName == "" && len(a.entries) > 1 {
@@ -408,7 +455,7 @@ func (a *bbs) activate() {
 	case e.file.IsDir:
 		a.browse(e.file.Name, "")
 	default:
-		a.startDownloads([]wire.File{e.file})
+		a.startDownloads([]wire.File{e.file}, false)
 	}
 }
 func (a *bbs) addLine(s string) {
@@ -434,6 +481,7 @@ func (a *bbs) handle(e ui.Event) bool {
 }
 
 func (a *bbs) key(id string) bool {
+	a.lastClick = clickStamp{} // keyboard navigation breaks a mouse double-click sequence
 	if a.composing {
 		switch id {
 		case "<Escape>":
@@ -502,6 +550,13 @@ func (a *bbs) key(id string) bool {
 }
 
 func (a *bbs) mouse(id string, x, y int) {
+	a.mouseAt(id, x, y, time.Now())
+}
+
+// mouseAt is shared by the real event loop and deterministic click tests.
+// Gotui reports down and release separately; only distinct completed clicks
+// can activate a row. Clicking a different row or scrolling resets the pair.
+func (a *bbs) mouseAt(id string, x, y int, now time.Time) {
 	if id == "<MouseRelease>" {
 		a.heldMouse = ""
 		return
@@ -512,10 +567,13 @@ func (a *bbs) mouse(id string, x, y int) {
 		}
 		a.heldMouse = id
 	}
-	// Buttons remain usable even while typing in chat.
+	if id != "<MouseLeft>" {
+		a.lastClick = clickStamp{}
+	}
 	if id == "<MouseLeft>" {
 		for i, button := range a.layout.buttons {
 			if button.contains(x, y) {
+				a.lastClick = clickStamp{}
 				switch i {
 				case 0:
 					a.downloadFlagged()
@@ -529,11 +587,13 @@ func (a *bbs) mouse(id string, x, y int) {
 			}
 		}
 		if a.layout.prompt.contains(x, y) {
+			a.lastClick = clickStamp{}
 			a.composing = true
 			return
 		}
 	}
 	if !a.layout.filesVisible || !a.layout.files.contains(x, y) {
+		a.lastClick = clickStamp{}
 		return
 	}
 	if id == "<MouseWheelUp>" {
@@ -549,16 +609,32 @@ func (a *bbs) mouse(id string, x, y int) {
 	}
 	if x <= a.layout.files.left || x >= a.layout.files.right-1 ||
 		y <= a.layout.files.top || y >= a.layout.files.bottom-1 {
-		return // border/title, not a file
+		a.lastClick = clickStamp{}
+		return
 	}
 	index := a.scroll + y - (a.layout.files.top + 1)
 	if index < 0 || index >= len(a.entries) {
+		a.lastClick = clickStamp{}
 		return
 	}
 	a.cursor = index
+	e := a.entries[index]
 	if id == "<MouseRight>" {
 		a.toggleFlag(index)
+		return
 	}
+	name := e.file.Name
+	if e.parent {
+		name = ".."
+	}
+	if a.lastClick.name == name && a.lastClick.dir == a.dir &&
+		!a.lastClick.at.IsZero() && now.Sub(a.lastClick.at) >= 0 &&
+		now.Sub(a.lastClick.at) <= doubleClickInterval {
+		a.lastClick = clickStamp{}
+		a.activate()
+		return
+	}
+	a.lastClick = clickStamp{name: name, dir: a.dir, at: now}
 }
 
 func (a *bbs) leaveChat() {
@@ -595,34 +671,100 @@ func (a *bbs) scrollBy(n int) {
 		a.cursor = min(len(a.entries)-1, max(a.scroll, min(a.cursor, a.scroll+rows-1)))
 	}
 }
+
+// includedByDirectory reports an ancestor selection without counting the
+// directory itself. Child rows visibly inherit a tagged parent's selection.
+func (a *bbs) includedByDirectory(name string) bool {
+	for dir := range a.flaggedDirs {
+		if strings.HasPrefix(name, dir+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *bbs) ensureDirFlags() {
+	if a.flaggedDirs == nil {
+		a.flaggedDirs = make(map[string]bool)
+	}
+}
+
+func (a *bbs) tagCount() int {
+	return len(a.flagged) + len(a.flaggedDirs)
+}
+
+func (a *bbs) tagged(e browserEntry) bool {
+	if e.parent {
+		return false
+	}
+	return a.includedByDirectory(e.file.Name) ||
+		(e.file.IsDir && a.flaggedDirs[e.file.Name]) ||
+		(!e.file.IsDir && a.flagged[e.file.ID])
+}
+
 func (a *bbs) toggleFlag(index int) {
-	if index < 0 || index >= len(a.entries) {
-		a.status = "No file to flag"
+	if a.busy {
+		a.status = "Finish the current batch before changing tags"
+		return
+	}
+	if index < 0 || index >= len(a.entries) || a.entries[index].parent {
+		a.status = "Select a file or directory to tag"
 		return
 	}
 	e := a.entries[index]
-	if e.parent || e.file.IsDir {
-		a.status = "Only files can be flagged; Enter opens directories"
+	if a.includedByDirectory(e.file.Name) {
+		a.status = "Already included by a tagged parent directory; untag the parent first"
 		return
 	}
-	item := e.file
-	if a.flagged == nil {
-		a.flagged = make(map[string]bool)
-	}
-	if a.flagged[item.ID] {
-		delete(a.flagged, item.ID)
+	if e.file.IsDir {
+		a.ensureDirFlags()
+		if a.flaggedDirs[e.file.Name] {
+			delete(a.flaggedDirs, e.file.Name)
+		} else {
+			a.flaggedDirs[e.file.Name] = true
+		}
 	} else {
-		a.flagged[item.ID] = true
-	}
-	a.status = fmt.Sprintf("%d flagged. Press D or click Download All to start.", len(a.flagged))
-}
-func (a *bbs) queued() []wire.File {
-	queue := make([]wire.File, 0, len(a.flagged))
-	for _, f := range a.files {
-		if !f.IsDir && a.flagged[f.ID] {
-			queue = append(queue, f)
+		if a.flagged == nil {
+			a.flagged = make(map[string]bool)
+		}
+		if a.flagged[e.file.ID] {
+			delete(a.flagged, e.file.ID)
+		} else {
+			a.flagged[e.file.ID] = true
 		}
 	}
+	a.status = fmt.Sprintf("%d tag(s). D or [ Download All ] queues tagged files and whole folders.", a.tagCount())
+}
+
+// queued resolves selected directories against the current server snapshot,
+// preserving empty directories and deduplicating overlapping folder/file tags.
+// Parents are scheduled before their children; individual files retain their
+// remote relative paths so the receiver recreates the tree.
+func (a *bbs) queued() []wire.File {
+	items := make(map[string]wire.File)
+	for _, f := range a.files {
+		if (f.IsDir && (a.flaggedDirs[f.Name] || a.includedByDirectory(f.Name))) ||
+			(!f.IsDir && (a.flagged[f.ID] || a.includedByDirectory(f.Name))) {
+			items[f.Name] = f
+		}
+	}
+	for dir := range a.flaggedDirs {
+		// Also support directories synthesized for older flat-listing peers.
+		if _, ok := items[dir]; !ok {
+			items[dir] = wire.File{Name: dir, IsDir: true}
+		}
+	}
+	queue := make([]wire.File, 0, len(items))
+	for _, f := range items {
+		queue = append(queue, f)
+	}
+	sort.Slice(queue, func(i, j int) bool {
+		left, right := queue[i].Name, queue[j].Name
+		if strings.EqualFold(left, right) {
+			return left < right
+		}
+		return strings.ToLower(left) < strings.ToLower(right)
+	})
 	return queue
 }
 func (a *bbs) fileCount() int {
@@ -637,15 +779,15 @@ func (a *bbs) fileCount() int {
 func (a *bbs) downloadFlagged() {
 	queue := a.queued()
 	if len(queue) == 0 {
-		a.status = "Flag files using Space or right-click first"
+		a.status = "Tag files or folders with Space or right-click first"
 		return
 	}
-	a.startDownloads(queue)
+	a.startDownloads(queue, true)
 }
 
 // Both Enter on an individual file and D on flagged files use the same TLS
 // transfer worker, progress reporting, SHA-256 checks and resume mechanism.
-func (a *bbs) startDownloads(queue []wire.File) {
+func (a *bbs) startDownloads(queue []wire.File, fromTags bool) {
 	if a.busy {
 		a.status = "A download is already in progress"
 		return
@@ -660,20 +802,26 @@ func (a *bbs) startDownloads(queue []wire.File) {
 	a.busy = true
 	var batchBytes int64
 	for _, item := range queue {
-		batchBytes += item.Size
+		if !item.IsDir {
+			batchBytes += item.Size
+		}
 	}
 	a.download = downloadStatus{
 		active: true, name: queue[0].Name, total: queue[0].Size,
 		batchBytes: batchBytes, index: 1, count: len(queue),
 		message: "Connecting over TLS 1.3...",
 	}
-	a.status = fmt.Sprintf("Downloading %d file(s); interrupted transfers can resume.", len(queue))
+	a.status = fmt.Sprintf("Transferring %d item(s); interrupted files can resume.", len(queue))
+	taggedDirs := []string{}
+	if fromTags {
+		for dir := range a.flaggedDirs {
+			taggedDirs = append(taggedDirs, dir)
+		}
+	}
 	go func() {
-		result := batchResult{total: len(queue)}
+		result := batchResult{total: len(queue), taggedDirs: taggedDirs}
 		var completedBytes int64
 		for i, item := range queue {
-			// Show the next file immediately, even if opening the stream takes
-			// a while. Deliver event updates without blocking network reads.
 			send := func(p transfer.Progress) {
 				e := downloadEvent{Progress: p, index: i + 1, completedBytes: completedBytes}
 				select {
@@ -681,15 +829,28 @@ func (a *bbs) startDownloads(queue []wire.File) {
 				default:
 				}
 			}
-			send(transfer.Progress{Name: item.Name, Total: item.Size, Message: "Connecting over TLS 1.3..."})
-			err := transfer.Download(a.ctx, a.client.Invitation, item, a.downloads, send)
+			var err error
+			if item.IsDir {
+				send(transfer.Progress{Name: item.Name, Message: "Creating directory..."})
+				err = transfer.EnsureDirectory(a.downloads, item.Name)
+				if err == nil {
+					result.dirsDone++
+				}
+			} else {
+				send(transfer.Progress{Name: item.Name, Total: item.Size, Message: "Connecting over TLS 1.3..."})
+				err = transfer.Download(a.ctx, a.client.Invitation, item, a.downloads, send)
+				if err == nil {
+					completedBytes += item.Size
+					result.filesDone++
+					result.succeeded = append(result.succeeded, item.ID)
+				}
+			}
 			if err != nil {
 				result.failed, result.err = item.Name, err
-				break // preserve failed and remaining flags for retry
+				result.remaining = append([]wire.File(nil), queue[i:]...)
+				break
 			}
-			completedBytes += item.Size
 			result.lastName, result.lastSize = item.Name, item.Size
-			result.succeeded = append(result.succeeded, item.ID)
 		}
 		select {
 		case a.completed <- result:
@@ -712,28 +873,34 @@ func (a *bbs) draw() {
 	a.keepVisible()
 	l := a.layout
 	header := widgets.NewParagraph()
-	header.Title = " WARP // ENCRYPTED MINI BBS "
-	header.Text = fmt.Sprintf("  * TLS 1.3   |   User: %s   |   Online: %d   |   Files: %d   |   Flagged: %d",
-		a.nick, a.people, a.fileCount(), len(a.flagged))
-	header.BorderStyle.Fg = ui.ColorPink
-	header.TitleStyle.Fg = ui.ColorLightCyan
+	header.Title = " ✦ WARP ✦ // ENCRYPTED FILE + CHAT LINK "
+	header.Text = fmt.Sprintf("  ◆ TLS 1.3  //  USER: %s  //  ONLINE: %d  //  FILES: %d  //  TAGS: %d",
+		safe(a.nick), a.people, a.fileCount(), a.tagCount())
+	header.BorderStyle.Fg = warpViolet
+	header.TitleStyle.Fg = warpGold
+	header.TextStyle.Fg = warpCyan
+	header.BackgroundColor = warpInk
 	header.SetRect(0, 0, width, 3)
 
 	foot := widgets.NewParagraph()
-	foot.BorderStyle.Fg = ui.ColorPink
-	foot.Title = " Space: flag  D: all  Enter: open/get  Tab: chat  Esc: back  q: quit "
+	foot.BorderStyle.Fg = warpViolet
+	foot.TitleStyle.Fg = warpGold
+	foot.Title = " SPACE: TAG  D: BATCH  ENTER/2-CLICK: OPEN/GET  TAB: CHAT  ESC: BACK "
 	foot.Text = actionBar
-	foot.TextStyle.Fg = ui.ColorLightCyan
+	foot.TextStyle.Fg = warpCyan
+	foot.BackgroundColor = warpInk
 	foot.SetRect(0, height-4, width, height-1)
 	status := widgets.NewParagraph()
 	status.Text = " " + a.status
 	status.SetRect(0, height-1, width, height)
-	status.TextStyle.Fg = ui.ColorLightCyan
+	status.TextStyle.Fg = warpGold
 
 	transferPanel := widgets.NewParagraph()
 	transferPanel.Title = " TRANSFER STATUS "
-	transferPanel.BorderStyle.Fg = ui.ColorPink
-	transferPanel.TextStyle.Fg = ui.ColorLightCyan
+	transferPanel.BorderStyle.Fg = warpPink
+	transferPanel.TitleStyle.Fg = warpGold
+	transferPanel.TextStyle.Fg = warpCyan
+	transferPanel.BackgroundColor = warpInk
 	transferPanel.WrapText = false
 	transferPanel.Text = downloadPanelText(a.download, l.transfer.right-l.transfer.left-2, l.transfer.bottom-l.transfer.top-2)
 	transferPanel.SetRect(l.transfer.left, l.transfer.top, l.transfer.right, l.transfer.bottom)
@@ -742,8 +909,11 @@ func (a *bbs) draw() {
 	start := a.scroll
 	end := min(len(a.entries), start+l.fileRows)
 	where := "/" + a.dir
-	list.Title = fmt.Sprintf(" FILES %s // %d-%d of %d | %d flagged ", safe(where), visibleStart(start, end), end, len(a.entries), len(a.flagged))
-	list.BorderStyle.Fg = ui.ColorLightCyan
+	list.Title = fmt.Sprintf(" FILE VAULT %s // %d-%d/%d | %d tags ", safe(where), visibleStart(start, end), end, len(a.entries), a.tagCount())
+	list.BorderStyle.Fg = warpCyan
+	list.TitleStyle.Fg = warpGold
+	list.TextStyle.Fg = warpWhite
+	list.BackgroundColor = warpInk
 	list.WrapText = false
 	list.Rows = make([]string, 0, max(1, end-start))
 	for i := start; i < end; i++ {
@@ -758,11 +928,15 @@ func (a *bbs) draw() {
 			continue
 		}
 		if f.IsDir {
-			list.Rows = append(list.Rows, marker+"    [DIR] "+safe(path.Base(f.Name))+"/")
+			flag := "[ ]"
+			if a.tagged(e) {
+				flag = "[x]"
+			}
+			list.Rows = append(list.Rows, marker+flag+" ◆ [DIR] "+safe(path.Base(f.Name))+"/")
 			continue
 		}
 		flag := "[ ]"
-		if a.flagged[f.ID] {
+		if a.tagged(e) {
 			flag = "[x]"
 		}
 		list.Rows = append(list.Rows, fmt.Sprintf("%s%s %s  (%s)", marker, flag, safe(path.Base(f.Name)), formatBytes(f.Size)))
@@ -771,13 +945,17 @@ func (a *bbs) draw() {
 		list.Rows = []string{"  This directory is empty. Press r to refresh."}
 	}
 	list.SelectedRow = max(0, a.cursor-a.scroll)
-	list.SelectedStyle.Fg = ui.ColorLightCyan
+	list.SelectedStyle.Fg = warpGold
+	list.SelectedStyle.Bg = warpViolet
+	list.SelectedStyle.Modifier = ui.ModifierBold
 	list.SetRect(l.files.left, l.files.top, l.files.right, l.files.bottom)
 
 	chat := widgets.NewParagraph()
-	chat.Title = " ENCRYPTED CHAT / Live "
-	chat.BorderStyle.Fg = ui.ColorPink
-	chat.TextStyle.Fg = ui.ColorWhite
+	chat.Title = " SIGNAL // LIVE ENCRYPTED CHAT "
+	chat.BorderStyle.Fg = warpPink
+	chat.TitleStyle.Fg = warpGold
+	chat.TextStyle.Fg = warpWhite
+	chat.BackgroundColor = warpInk
 	chat.WrapText = true
 	chatText := a.chat
 	maxRows := l.fileRows
@@ -790,13 +968,19 @@ func (a *bbs) draw() {
 	var prompt ui.Drawable
 	if a.composing {
 		a.input.Title = " CHAT / Enter: send, Escape: files "
-		a.input.BorderStyle.Fg = ui.ColorPink
+		a.input.BorderStyle.Fg = warpPink
+		a.input.TitleStyle.Fg = warpGold
+		a.input.TextStyle.Fg = warpWhite
+		a.input.BackgroundColor = warpInk
 		a.input.SetRect(l.prompt.left, l.prompt.top, l.prompt.right, l.prompt.bottom)
 		prompt = a.input
 	} else {
 		p := widgets.NewParagraph()
 		p.Title = " CHAT PROMPT "
-		p.BorderStyle.Fg = ui.ColorPink
+		p.BorderStyle.Fg = warpPink
+		p.TitleStyle.Fg = warpGold
+		p.TextStyle.Fg = warpCyan
+		p.BackgroundColor = warpInk
 		p.Text = " Press Tab or click here to write a message."
 		p.SetRect(l.prompt.left, l.prompt.top, l.prompt.right, l.prompt.bottom)
 		prompt = p

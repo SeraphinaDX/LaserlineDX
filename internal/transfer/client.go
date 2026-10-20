@@ -13,7 +13,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -157,28 +156,9 @@ func makeSafeDirs(dest, relative string) error {
 	if parent == "." {
 		return nil
 	}
-	root, err := os.OpenRoot(dest)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-	cur := ""
-	for _, part := range strings.Split(parent, string(filepath.Separator)) {
-		if part == "" || part == "." || part == ".." {
-			return errors.New("invalid directory component")
-		}
-		cur = filepath.Join(cur, part)
-		err := root.Mkdir(cur, 0700)
-		if err != nil && !os.IsExist(err) {
-			return err
-		}
-		info, err := root.Lstat(cur)
-		if err != nil || !info.IsDir() {
-			return fmt.Errorf("unsafe destination directory: %s", cur)
-		}
-	}
-	return nil
+	return EnsureDirectory(dest, parent)
 }
+
 func preparePart(part, sidecar string, entry wire.File) error {
 	st, err := os.Lstat(part)
 	if err != nil && !os.IsNotExist(err) {

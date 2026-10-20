@@ -135,3 +135,57 @@ func TestEnterInSubdirectoryDownloadsOnlySelectedFile(t *testing.T) {
 		t.Fatalf("downloaded nested file content wrong: %q %v", got, err)
 	}
 }
+
+func TestTaggedFolderDownloadsFilesAndEmptyDirectories(t *testing.T) {
+	shared := t.TempDir()
+	for _, dir := range []string{"music", "music/albums", "music/empty"} {
+		if err := os.MkdirAll(filepath.Join(shared, dir), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(shared, "music/albums/track.txt"), []byte("secure track"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shared, "root.txt"), []byte("not tagged"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	srv, err := hub.Start(hub.Options{Path: shared, Listen: "127.0.0.1:0", Advertise: "127.0.0.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	code, err := invite.Parse(srv.Invitation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	client, welcome, err := transfer.Join(ctx, code, "directory tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	dest := t.TempDir()
+	a := &bbs{ctx: ctx, client: client, files: welcome.Files, flagged: map[string]bool{}, flaggedDirs: map[string]bool{"music": true},
+		downloads: dest, progress: make(chan downloadEvent, 32), completed: make(chan batchResult, 1)}
+	a.downloadFlagged()
+	select {
+	case result := <-a.completed:
+		if result.err != nil || result.filesDone != 1 || result.dirsDone != 3 || result.total != 4 {
+			t.Fatalf("folder batch incomplete: %+v", result)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out retrieving directory")
+	}
+	b, err := os.ReadFile(filepath.Join(dest, "music/albums/track.txt"))
+	if err != nil || string(b) != "secure track" {
+		t.Fatalf("nested download: %s, %v", b, err)
+	}
+	info, err := os.Stat(filepath.Join(dest, "music/empty"))
+	if err != nil || !info.IsDir() {
+		t.Fatalf("empty folder omitted: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "root.txt")); !os.IsNotExist(err) {
+		t.Fatal("untagged file included")
+	}
+}

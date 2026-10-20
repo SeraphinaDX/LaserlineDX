@@ -17,10 +17,10 @@ import (
 	"warp/internal/tui"
 )
 
-const version = "0.4.0"
+const version = "0.5.0"
 
 func usage() {
-	fmt.Print(`Warp - encrypted file-sharing mini BBS (v` + version + `)
+	fmt.Print(`Warp - encrypted BBS-like file sharing and chat (v` + version + `)
 
 Usage:
   warp serve [options] [file-or-directory]
@@ -28,7 +28,7 @@ Usage:
 
 Commands:
   serve     Share one file, one directory recursively, or (by default) .
-  connect   Join a Warp BBS for resumable downloads and ephemeral chat.
+  connect   Join Warp for BBS-like browsing, resumable downloads and chat.
 
 Examples:
   warp serve
@@ -88,7 +88,7 @@ func serve(args []string) error {
 	}
 	defer srv.Close()
 	abs, _ := filepath.Abs(share)
-	fmt.Printf("\n  ✦ WARP %s  /  ENCRYPTED FILE BBS\n\n", version)
+	fmt.Printf("\n  ✦ WARP %s  /  ENCRYPTED BBS-LIKE FILE + CHAT\n\n", version)
 	fmt.Printf("  Sharing: %s\n  Listening: %s\n  Invitation code (share privately):\n\n%s\n\n", abs, srv.Address(), srv.Invitation())
 	fmt.Println("  Ask the recipient to run: warp connect CODE")
 	fmt.Println("  TLS 1.3 · multiple users · resumable downloads · Ctrl+C to stop")

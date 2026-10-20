@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0 — Mouse double-click, recursive directory tags, Warp neon palette
+
+- Added double-click with the left mouse button: enter directories (and go up via the parent entry) or download a single file without tagging it. A single click still only selects.
+- **Space** and right-click now tag directories as well as files. Tagged directories recursively include children, create empty directories locally, preserve relative paths, and deduplicate overlapping tags.
+- If a batch fails, outstanding items remain tagged individually for safe retry without overwriting completed files.
+- Added Warp's violet/cyan/hot-pink/gold retro terminal theme and clearer folder tag indicators.
+- Reworded CLI help and README to describe Warp as **BBS-like**, explicitly distinguishing it from a complete BBS.
+- Added deterministic mouse timing tests, recursive tagging tests, safe folder-creation tests, and a live encrypted tagged-folder integration test.
+
+
 ## 0.4.0 — Tab chat, Enter downloads, real directory browser
 
 - Changed the chat shortcut from Enter to **Tab**; Enter still sends a message while chatting, and Escape leaves chat.
@@ -7,7 +17,7 @@
 - The server now announces directory entries, including empty directories, alongside regular files.
 - The client displays a real hierarchical browser, with folders before files, a breadcrumb-like current path in the title, and a `[..] Parent directory` row in subfolders.
 - **Backspace** or **Escape** goes to the parent while file browsing. Folder navigation preserves selection and scrolls large directories correctly.
-- Flags are file-only and persist across navigation and refresh; **D** still downloads flagged files from multiple directories.
+- At 0.4.0, flags were file-only and persisted across navigation and refresh; **D** downloaded flagged files from multiple directories.
 - Added hierarchical navigation, empty-folder, scrolling/refresh and single-file Enter unit tests, plus server directory-listing tests.
 - Upgrade both host and clients together; old clients cannot distinguish new folder entries from files.
 
