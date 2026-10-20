@@ -54,9 +54,13 @@ In the BBS-like file area, use **Up/Down** or **j/k** to move through entries, o
 
 Warp's gotui interface uses **plasma violet borders**, **electric cyan file
 panes**, **hot-pink chat and transfer outlines**, **gold selections and titles**,
-and a **midnight-blue background**. This neon, BBS-inspired palette is part of
+and a **continuous midnight-blue background** (including text, list rows,
+borders, empty spaces, and the bottom status strip). This neon, BBS-inspired palette is part of
 the regular client UI (not a special terminal theme to install). Truecolor
-terminals show the full palette; other terminals may approximate the colours.
+terminals such as Alacritty show the full palette; other terminals may
+approximate the colours. Warp paints every terminal cell and gives foreground
+text an explicit dark background, so the terminal's own background should
+not bleed through during scrolling or resizing.
 
 The file pane and chat pane are side by side on wide terminals (92+ columns). On narrower terminals, Tab/chat switches the main pane between files and chat. A dedicated **TRANSFER STATUS** window is visible under the file/chat area while idle and during downloads. It shows the current filename, progress bar and percentage, overall batch progress, downloaded bytes, current transfer speed, retry attempt and transfer/reconnect status. Smaller terminals use a compact version of the window to keep the file list usable. The minimum terminal size is 40 columns by 16 rows. A terminal with mouse reporting enabled is needed for pointer actions (gotui enables this by default).
 
