@@ -14,6 +14,8 @@ encrypted downloads, browsing shared folders, and ephemeral group chat.
 **Status: 0.5.0 experimental source release.** The protocol has not undergone
 an independent security audit. Do not treat it as a hardened public file server.
 
+![Screenshot](screenshot.avif)
+
 ## Build
 
 Go **1.24 or newer** is required for gotui v5 and for the bounded filesystem
