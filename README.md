@@ -1,5 +1,7 @@
 # Warp
 
+Quickly share your files with friends at warp speed.
+
 Warp is a tiny, encrypted, multi-user **BBS-like file-sharing and chat tool**
 written in Go. It offers the **file area and live chat of a miniature BBS-like
 experience**, without claiming to be a full bulletin board system. The terminal
