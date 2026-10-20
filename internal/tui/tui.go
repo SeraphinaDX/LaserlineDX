@@ -865,8 +865,10 @@ func (a *bbs) draw() {
 		ui.Clear()
 		p := widgets.NewParagraph()
 		p.Text = "Warp needs at least 40x16 terminal cells"
+		styleWarpPanel(&p.Block, warpViolet)
+		p.TextStyle = ui.NewStyle(warpWhite, warpInk)
 		p.SetRect(0, 0, max(width, 1), max(height, 1))
-		ui.Render(p)
+		ui.Render(warpBackdrop(max(width, 1), max(height, 1)), p)
 		return
 	}
 	a.layout = makeLayout(width, height, a.composing)
@@ -876,31 +878,24 @@ func (a *bbs) draw() {
 	header.Title = " ✦ WARP ✦ // ENCRYPTED FILE + CHAT LINK "
 	header.Text = fmt.Sprintf("  ◆ TLS 1.3  //  USER: %s  //  ONLINE: %d  //  FILES: %d  //  TAGS: %d",
 		safe(a.nick), a.people, a.fileCount(), a.tagCount())
-	header.BorderStyle.Fg = warpViolet
-	header.TitleStyle.Fg = warpGold
-	header.TextStyle.Fg = warpCyan
-	header.BackgroundColor = warpInk
+	styleWarpPanel(&header.Block, warpViolet)
+	header.TextStyle = ui.NewStyle(warpCyan, warpInk)
 	header.SetRect(0, 0, width, 3)
 
 	foot := widgets.NewParagraph()
-	foot.BorderStyle.Fg = warpViolet
-	foot.TitleStyle.Fg = warpGold
+	styleWarpPanel(&foot.Block, warpViolet)
 	foot.Title = " SPACE: TAG  D: BATCH  ENTER/2-CLICK: OPEN/GET  TAB: CHAT  ESC: BACK "
 	foot.Text = actionBar
-	foot.TextStyle.Fg = warpCyan
-	foot.BackgroundColor = warpInk
+	foot.TextStyle = ui.NewStyle(warpCyan, warpInk)
 	foot.SetRect(0, height-4, width, height-1)
-	status := widgets.NewParagraph()
-	status.Text = " " + a.status
-	status.SetRect(0, height-1, width, height)
-	status.TextStyle.Fg = warpGold
+	// A one-cell status strip needs a dedicated drawable: gotui Paragraph
+	// reserves an inner border even when Border is disabled.
+	status := warpStatus(a.status, width, height)
 
 	transferPanel := widgets.NewParagraph()
 	transferPanel.Title = " TRANSFER STATUS "
-	transferPanel.BorderStyle.Fg = warpPink
-	transferPanel.TitleStyle.Fg = warpGold
-	transferPanel.TextStyle.Fg = warpCyan
-	transferPanel.BackgroundColor = warpInk
+	styleWarpPanel(&transferPanel.Block, warpPink)
+	transferPanel.TextStyle = ui.NewStyle(warpCyan, warpInk)
 	transferPanel.WrapText = false
 	transferPanel.Text = downloadPanelText(a.download, l.transfer.right-l.transfer.left-2, l.transfer.bottom-l.transfer.top-2)
 	transferPanel.SetRect(l.transfer.left, l.transfer.top, l.transfer.right, l.transfer.bottom)
@@ -910,10 +905,8 @@ func (a *bbs) draw() {
 	end := min(len(a.entries), start+l.fileRows)
 	where := "/" + a.dir
 	list.Title = fmt.Sprintf(" FILE VAULT %s // %d-%d/%d | %d tags ", safe(where), visibleStart(start, end), end, len(a.entries), a.tagCount())
-	list.BorderStyle.Fg = warpCyan
-	list.TitleStyle.Fg = warpGold
-	list.TextStyle.Fg = warpWhite
-	list.BackgroundColor = warpInk
+	styleWarpPanel(&list.Block, warpCyan)
+	list.TextStyle = ui.NewStyle(warpWhite, warpInk)
 	list.WrapText = false
 	list.Rows = make([]string, 0, max(1, end-start))
 	for i := start; i < end; i++ {
@@ -945,17 +938,13 @@ func (a *bbs) draw() {
 		list.Rows = []string{"  This directory is empty. Press r to refresh."}
 	}
 	list.SelectedRow = max(0, a.cursor-a.scroll)
-	list.SelectedStyle.Fg = warpGold
-	list.SelectedStyle.Bg = warpViolet
-	list.SelectedStyle.Modifier = ui.ModifierBold
+	list.SelectedStyle = ui.NewStyle(warpGold, warpViolet, ui.ModifierBold)
 	list.SetRect(l.files.left, l.files.top, l.files.right, l.files.bottom)
 
 	chat := widgets.NewParagraph()
 	chat.Title = " SIGNAL // LIVE ENCRYPTED CHAT "
-	chat.BorderStyle.Fg = warpPink
-	chat.TitleStyle.Fg = warpGold
-	chat.TextStyle.Fg = warpWhite
-	chat.BackgroundColor = warpInk
+	styleWarpPanel(&chat.Block, warpPink)
+	chat.TextStyle = ui.NewStyle(warpWhite, warpInk)
 	chat.WrapText = true
 	chatText := a.chat
 	maxRows := l.fileRows
@@ -968,30 +957,31 @@ func (a *bbs) draw() {
 	var prompt ui.Drawable
 	if a.composing {
 		a.input.Title = " CHAT / Enter: send, Escape: files "
-		a.input.BorderStyle.Fg = warpPink
-		a.input.TitleStyle.Fg = warpGold
-		a.input.TextStyle.Fg = warpWhite
-		a.input.BackgroundColor = warpInk
+		styleWarpPanel(&a.input.Block, warpPink)
+		a.input.TextStyle = ui.NewStyle(warpWhite, warpInk)
+		a.input.CursorStyle = ui.NewStyle(warpInk, warpGold)
 		a.input.SetRect(l.prompt.left, l.prompt.top, l.prompt.right, l.prompt.bottom)
 		prompt = a.input
 	} else {
 		p := widgets.NewParagraph()
 		p.Title = " CHAT PROMPT "
-		p.BorderStyle.Fg = warpPink
-		p.TitleStyle.Fg = warpGold
-		p.TextStyle.Fg = warpCyan
-		p.BackgroundColor = warpInk
+		styleWarpPanel(&p.Block, warpPink)
+		p.TextStyle = ui.NewStyle(warpCyan, warpInk)
 		p.Text = " Press Tab or click here to write a message."
 		p.SetRect(l.prompt.left, l.prompt.top, l.prompt.right, l.prompt.bottom)
 		prompt = p
 	}
 	ui.Clear()
+	// Every cell begins with the Warp background, including blank pane edges
+	// and the bottom status row. Text and borders also use opaque backgrounds
+	// so rendering over the canvas cannot reveal Alacritty's default colour.
+	backdrop := warpBackdrop(width, height)
 	if l.wide {
-		ui.Render(header, list, chat, transferPanel, prompt, foot, status)
+		ui.Render(backdrop, header, list, chat, transferPanel, prompt, foot, status)
 	} else if a.composing {
-		ui.Render(header, chat, transferPanel, prompt, foot, status)
+		ui.Render(backdrop, header, chat, transferPanel, prompt, foot, status)
 	} else {
-		ui.Render(header, list, transferPanel, prompt, foot, status)
+		ui.Render(backdrop, header, list, transferPanel, prompt, foot, status)
 	}
 }
 func visibleStart(start, end int) int {

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — Alacritty background rendering fix
+
+- Fix patchy/missing background colour: consistently paint the entire terminal,
+  including empty margins, text cells, borders, titles, list rows and chat input.
+- Make the one-line status strip render with the Warp background and readable
+  status text rather than relying on gotui's bordered paragraph inset.
+- Add renderer-level regression tests for the theme and status strip.
+
+
 ## 0.5.0 — Mouse double-click, recursive directory tags, Warp neon palette
 
 - Added double-click with the left mouse button: enter directories (and go up via the parent entry) or download a single file without tagging it. A single click still only selects.
