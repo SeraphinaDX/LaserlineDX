@@ -1,22 +1,20 @@
-# Warp
+# Laserline DX
 
-Quickly share your files with friends at warp speed.
+Encrypted file transfers and live chat, with the spirit of a 1990s dial-up file area.
 
-Warp is a tiny, encrypted, multi-user **BBS-like file-sharing and chat tool**
+Laserline DX is a tiny, encrypted, multi-user **BBS-like file-sharing and chat tool**
 written in Go. It offers the **file area and live chat of a miniature BBS-like
 experience**, without claiming to be a full bulletin board system. The terminal
-client uses [gotui v5](https://github.com/metaspartan/gotui). Warp is a
+client uses [gotui v5](https://github.com/metaspartan/gotui). Laserline DX is a
 direct-connect alternative to Croc: no accounts, no environment-variable
 configuration, and no third-party relay required.
 
-**Warp is not a full BBS:** there are no message boards, user accounts, doors,
+**Laserline DX is not a full BBS:** there are no message boards, user accounts, doors,
 forums, persistent chat archives, or remote uploads. It concentrates on
 encrypted downloads, browsing shared folders, and ephemeral group chat.
 
-**Status: 0.5.0 experimental source release.** The protocol has not undergone
+**Status: 0.6.0 experimental source release.** The protocol has not undergone
 an independent security audit. Do not treat it as a hardened public file server.
-
-![Screenshot](screenshot.avif)
 
 ## Build
 
@@ -25,7 +23,7 @@ API (`os.OpenRoot`).
 
 ```sh
 go mod tidy
-go build -o warp ./cmd/warp
+go build -o laserline ./cmd/laserline
 ```
 
 ## Quickstart
@@ -34,14 +32,14 @@ On the host, in the directory you want to share:
 
 ```sh
 cd ~/Documents
-warp serve
+laserline serve
 ```
 
-Warp prints an invitation code beginning with `W1-`. Send this code privately.
+Laserline DX prints a new invitation code beginning with `LD1-`. Send this code privately.
 Another user enters:
 
 ```sh
-warp connect W1-PASTE_THE_FULL_CODE_HERE
+laserline connect LD1-PASTE_THE_FULL_CODE_HERE
 ```
 
 In the BBS-like file area, use **Up/Down** or **j/k** to move through entries, or **PageUp**, **PageDown**, **Home** and **End** for large directories. The current directory appears in the file pane's title, and the list scrolls with the selected row. Mouse-wheel scrolling also works over the file area. Folders are listed before files and marked `[DIR]`, and even empty shared folders appear in the listing.
@@ -54,32 +52,32 @@ In the BBS-like file area, use **Up/Down** or **j/k** to move through entries, o
 - **Tab** opens the **encrypted chat prompt**. **Enter** while composing sends the message; **Escape** leaves chat and returns to file navigation. You can also click **[ Chat ]**, **[ Files ]**, or the chat prompt area.
 - **r** refreshes the file listing; flags survive a refresh when the exact file version remains available. **q** disconnects from file-navigation mode; **Ctrl+C** always quits.
 
-### Warp's retro terminal palette
+### Laserline DX's retro terminal palette
 
-Warp's gotui interface uses **plasma violet borders**, **electric cyan file
+Laserline DX's gotui interface uses **plasma violet borders**, **electric cyan file
 panes**, **hot-pink chat and transfer outlines**, **gold selections and titles**,
 and a **continuous midnight-blue background** (including text, list rows,
 borders, empty spaces, and the bottom status strip). This neon, BBS-inspired palette is part of
 the regular client UI (not a special terminal theme to install). Truecolor
 terminals such as Alacritty show the full palette; other terminals may
-approximate the colours. Warp paints every terminal cell and gives foreground
+approximate the colours. Laserline DX paints every terminal cell and gives foreground
 text an explicit dark background, so the terminal's own background should
 not bleed through during scrolling or resizing.
 
 The file pane and chat pane are side by side on wide terminals (92+ columns). On narrower terminals, Tab/chat switches the main pane between files and chat. A dedicated **TRANSFER STATUS** window is visible under the file/chat area while idle and during downloads. It shows the current filename, progress bar and percentage, overall batch progress, downloaded bytes, current transfer speed, retry attempt and transfer/reconnect status. Smaller terminals use a compact version of the window to keep the file list usable. The minimum terminal size is 40 columns by 16 rows. A terminal with mouse reporting enabled is needed for pointer actions (gotui enables this by default).
 
-Downloads default to `./WarpDownloads`. You can select another path:
+Downloads default to `./LaserlineDownloads`. You can select another path:
 
 ```sh
-warp connect --nick Brit --downloads ~/Downloads W1-PASTE_CODE
+laserline connect --nick Brit --downloads ~/Downloads LD1-PASTE_CODE
 ```
 
 ### Sharing files
 
 ```sh
-warp serve                    # shares the current directory recursively
-warp serve ~/Documents         # shares that directory recursively
-warp serve ~/Downloads/book.pdf # shares just book.pdf
+laserline serve                    # shares the current directory recursively
+laserline serve ~/Documents         # shares that directory recursively
+laserline serve ~/Downloads/book.pdf # shares just book.pdf
 ```
 
 Directory symlinks are not followed during listing, and files are opened
@@ -87,31 +85,32 @@ within an `os.Root` jail. **Everything regular under the shared directory is
 visible to anyone with the code**, including hidden files. Use a dedicated
 sharing directory if you don't want to expose unrelated files.
 
-The server now includes directory entries in the initial listing and on
-refresh, including empty directories. **Update both the serving and connecting
-Warp installations to 0.4.0 or newer together.** Older clients do not understand the
-new directory indicator and may attempt to download a folder.
+The server includes directory entries (including empty directories) in its
+initial listing and on refresh. Both the host and connecting users should run
+Laserline DX 0.6.0 or newer. This rename intentionally starts a new invitation
+code format (`LD1-`) and a new partial-download suffix (`.laserline-part`);
+old Warp codes and partially downloaded files are not migrated.
 
 ### Over the internet
 
-Warp's invitation code holds the reachable host/port, an access secret,
+Laserline DX's invitation code holds the reachable host/port, an access secret,
 and a pinned TLS certificate fingerprint. It does **not** use a rendezvous
 service or relay; for NAT traversal you need a forwarded TCP port or a VPN.
 
 ```sh
-warp serve --listen :47477 --advertise your.public.ip
+laserline serve --listen :47477 --advertise your.public.ip
 # Or: --advertise your-tailscale-ip
 ```
 
-On one LAN, Warp automatically advertises a detected local IPv4 address.
+On one LAN, Laserline DX automatically advertises a detected local IPv4 address.
 If it selects the wrong interface, use `--advertise` explicitly. The default
 listening port is **TCP 47477**.
 
 ## Privacy and encryption
 
 - **TLS 1.3 is mandatory**, on both the control/chat stream and each file stream.
-- Warp generates a temporary Ed25519 TLS certificate and a random 128-bit
-  capability on each `warp serve` session. No environment variables or
+- Laserline DX generates a temporary Ed25519 TLS certificate and a random 128-bit
+  capability on each `laserline serve` session. No environment variables or
   external accounts are needed.
 - Clients pin the SHA-256 hash of the server certificate embedded in the
   invitation, rejecting mismatched hosts (no "accept unknown certificate").
@@ -119,8 +118,8 @@ listening port is **TCP 47477**.
   do not post it publicly. Generate a new code by restarting the server.
 - Chat is encrypted **in transit between each client and the server**; the
   host can read messages in server memory. It is *not* peer-to-peer end-to-end
-  encrypted chat. Chat history is not written to disk by Warp.
-- Source files are never intentionally modified by Warp.
+  encrypted chat. Chat history is not written to disk by Laserline DX.
+- Source files are never intentionally modified by Laserline DX.
 
 ## Reliable transfers
 
@@ -134,13 +133,13 @@ unfinished entries are tagged individually so retrying won't try to overwrite
 already completed downloads. Tags last for the current connection, but on-disk
 partial files survive reconnects.
 
-Warp downloads to `filename.warp-part` and writes a nearby JSON metadata file.
-If the connection drops, Warp retries up to four times automatically; on
+Laserline DX downloads to `filename.laserline-part` and writes a nearby JSON metadata file.
+If the connection drops, Laserline DX retries up to four times automatically; on
 subsequent sessions, selecting that file continues from the on-disk offset.
 An entire-file SHA-256 checksum is verified before the completed file is
 renamed into place. Server file size and modification time must remain
 unchanged while transferring. A changed file has a new ID and must start a
-new download. Warp does not overwrite completed downloads.
+new download. Laserline DX does not overwrite completed downloads.
 
 For now, there are a few constraints: downloads are one at a time per client,
 the file list is a snapshot until refreshed (and limited to 10,000 file and directory entries per share), all server clients need to be

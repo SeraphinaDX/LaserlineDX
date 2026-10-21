@@ -16,9 +16,9 @@ import (
 	"sync"
 	"time"
 
-	"warp/internal/hub"
-	"warp/internal/invite"
-	"warp/internal/wire"
+	"laserline/internal/hub"
+	"laserline/internal/invite"
+	"laserline/internal/wire"
 )
 
 type Client struct {
@@ -118,7 +118,7 @@ func Download(ctx context.Context, code invite.Code, entry wire.File, dest strin
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	part := out + ".warp-part"
+	part := out + ".laserline-part"
 	sidecar := part + ".json"
 	if err := preparePart(part, sidecar, entry); err != nil {
 		return err
@@ -146,7 +146,7 @@ func Download(ctx context.Context, code invite.Code, entry wire.File, dest strin
 			}
 		}
 	}
-	return fmt.Errorf("transfer paused; rerun Warp and select the file to resume: %w", last)
+	return fmt.Errorf("transfer paused; rerun laserline and select the file to resume: %w", last)
 }
 
 // Use os.Root when creating directory trees to keep a compromised directory
@@ -199,7 +199,7 @@ func preparePart(part, sidecar string, entry wire.File) error {
 	return os.WriteFile(sidecar, info, 0600)
 }
 
-var errMismatch = errors.New("file checksum failed; partial file retained for inspection (remove .warp-part to restart)")
+var errMismatch = errors.New("file checksum failed; partial file retained for inspection (remove .laserline-part to restart)")
 
 func downloadOnce(ctx context.Context, code invite.Code, entry wire.File, part, sidecar, out string, attempt int, notify func(Progress)) error {
 	f, err := os.OpenFile(part, os.O_WRONLY, 0600)

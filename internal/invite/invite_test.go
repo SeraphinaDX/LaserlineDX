@@ -24,7 +24,7 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 func TestBadCode(t *testing.T) {
-	for _, s := range []string{"", "W1-x", "W1-invalid!", "W2-abc"} {
+	for _, s := range []string{"", "LD1-x", "LD1-invalid!", "LD2-abc", "W1-old-invitation"} {
 		if _, err := Parse(s); err == nil {
 			t.Errorf("accepted %q", s)
 		}

@@ -9,8 +9,8 @@ import (
 	ui "github.com/metaspartan/gotui/v5"
 	"github.com/metaspartan/gotui/v5/widgets"
 
-	"warp/internal/transfer"
-	"warp/internal/wire"
+	"laserline/internal/transfer"
+	"laserline/internal/wire"
 )
 
 func testBBS(count, width, height int) *bbs {

@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"warp/internal/hub"
-	"warp/internal/invite"
-	"warp/internal/wire"
+	"laserline/internal/hub"
+	"laserline/internal/invite"
+	"laserline/internal/wire"
 )
 
 func startTestHost(t *testing.T, data []byte) (*hub.Server, invite.Code) {
@@ -86,11 +86,11 @@ func TestResumeAndVerify(t *testing.T) {
 	entry := wel.Files[0]
 	out := t.TempDir()
 	path := filepath.Join(out, entry.Name)
-	if err := os.WriteFile(path+".warp-part", data[:120000], 0600); err != nil {
+	if err := os.WriteFile(path+".laserline-part", data[:120000], 0600); err != nil {
 		t.Fatal(err)
 	}
 	meta, _ := json.Marshal(manifest{ID: entry.ID, Name: entry.Name, Size: entry.Size})
-	if err := os.WriteFile(path+".warp-part.json", meta, 0600); err != nil {
+	if err := os.WriteFile(path+".laserline-part.json", meta, 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := Download(ctx, code, entry, out, func(Progress) {}); err != nil {
@@ -103,7 +103,7 @@ func TestResumeAndVerify(t *testing.T) {
 	if !bytes.Equal(got, data) {
 		t.Fatal("resumed file contents mismatch")
 	}
-	if _, err := os.Stat(path + ".warp-part"); !os.IsNotExist(err) {
+	if _, err := os.Stat(path + ".laserline-part"); !os.IsNotExist(err) {
 		t.Fatalf("partial file remains after completion: %v", err)
 	}
 	if err := Download(ctx, code, entry, out, func(Progress) {}); err == nil {
