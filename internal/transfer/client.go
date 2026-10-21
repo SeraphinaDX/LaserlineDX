@@ -52,6 +52,16 @@ func Join(ctx context.Context, code invite.Code, nick string) (*Client, wire.Mes
 		conn.Close()
 		return nil, welcome, fmt.Errorf("unexpected response: %s", welcome.Type)
 	}
+	// One-use invitations authorize joining only. The session credential
+	// authorizes subsequent TLS downloads without reusing the consumed code.
+	if welcome.Token != "" {
+		session, err := hex.DecodeString(welcome.Token)
+		if err != nil || len(session) != len(code.Secret) {
+			conn.Close()
+			return nil, welcome, errors.New("invalid session download credential")
+		}
+		copy(code.Secret[:], session)
+	}
 	conn.SetDeadline(time.Time{})
 	c := &Client{conn: conn, Invitation: code, Updates: make(chan wire.Message, 128), Done: make(chan error, 1)}
 	go func() {

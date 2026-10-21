@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.0 — One-time-pad invitation mode
+
+- Added `laserline serve --one-time-pad`: each LD1 invitation admits one user,
+  then expires and a fresh code is printed at the server console.
+- Enforced atomic rotation so simultaneous joins cannot reuse a code. Failed
+  joins and download attempts do not consume it.
+- Issued individual TLS-protected session download credentials. Existing users
+  keep chatting and transferring files when a new invitation is generated.
+- Reconnecting requires a fresh code, while unchanged partial files still
+  resume with SHA-256 verification.
+- Added concurrency, authentication, download and resume regression tests.
+- Ordinary reusable invitation mode remains the default.
+
+
 ## 0.6.0 — Laserline DX rename (breaking)
 
 - Renamed Warp to **Laserline DX**; the executable and CLI command are now `laserline`.
