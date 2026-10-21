@@ -17,7 +17,7 @@ import (
 	"laserline/internal/tui"
 )
 
-const version = "0.6.0"
+const version = "0.7.0"
 
 func usage() {
 	fmt.Print(`Laserline DX - encrypted BBS-like file sharing and chat (v` + version + `)
@@ -33,6 +33,7 @@ Commands:
 Examples:
   laserline serve
   laserline serve ~/Downloads
+  laserline serve --one-time-pad
   laserline serve --listen :47477 --advertise 192.168.1.50
   laserline connect LD1-... 
   laserline connect --nick Alice LD1-...
@@ -72,6 +73,7 @@ func serve(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	listen := fs.String("listen", ":47477", "TCP bind address")
 	advertise := fs.String("advertise", "", "reachable IP address or hostname to put in the code")
+	oneTimePad := fs.Bool("one-time-pad", false, "rotate the LD1 invitation after each accepted user")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -82,7 +84,7 @@ func serve(args []string) error {
 	if fs.NArg() == 1 {
 		share = fs.Arg(0)
 	}
-	srv, err := hub.Start(hub.Options{Path: share, Listen: *listen, Advertise: *advertise})
+	srv, err := hub.Start(hub.Options{Path: share, Listen: *listen, Advertise: *advertise, OneTimePad: *oneTimePad})
 	if err != nil {
 		return err
 	}
@@ -92,7 +94,12 @@ func serve(args []string) error {
 	fmt.Printf("  Sharing: %s\n  Listening: %s\n  Invitation code (share privately):\n\n%s\n\n", abs, srv.Address(), srv.Invitation())
 	fmt.Println("  Ask the recipient to run: laserline connect CODE")
 	fmt.Println("  TLS 1.3 · multiple users · resumable downloads · Ctrl+C to stop")
-	fmt.Println("  Code expires when this server process stops.")
+	if *oneTimePad {
+		fmt.Println("  ONE-TIME-PAD MODE: each code admits one user, then a new code appears here.")
+		fmt.Println("  Reconnecting requires a fresh code from the server; partial files can resume.")
+	} else {
+		fmt.Println("  Reusable code expires when this server process stops.")
+	}
 	fmt.Println()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -103,6 +110,10 @@ func serve(args []string) error {
 			return nil
 		case e := <-srv.Events:
 			fmt.Println("  • " + e)
+		case <-srv.InvitationUpdates:
+			fmt.Println("\n  Previous LD1 invitation consumed. New single-use invitation:")
+			fmt.Println(srv.Invitation())
+			fmt.Println("  Send privately to the next user.\n")
 		}
 	}
 }

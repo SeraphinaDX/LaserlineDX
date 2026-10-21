@@ -28,6 +28,9 @@ type Options struct {
 	Path      string
 	Listen    string
 	Advertise string
+	// OneTimePad rotates a one-use invitation after each successful control admission.
+	// The nickname describes one-use access codes, not OTP encryption.
+	OneTimePad bool
 }
 
 type Server struct {
@@ -36,6 +39,9 @@ type Server struct {
 	code      invite.Code
 	mu        sync.Mutex
 	peers     map[*peer]bool
+	oneTimePad bool
+	sessions  map[[16]byte]bool // per-client file-download credentials
+	InvitationUpdates chan struct{} // signal the server console to print the newest code
 	transfers chan struct{}
 	Events    chan string
 	closed    bool
@@ -45,6 +51,7 @@ type peer struct {
 	conn net.Conn
 	mu   sync.Mutex
 	name string
+	session [16]byte
 }
 
 func (p *peer) send(m wire.Message) error {
@@ -96,6 +103,9 @@ func Start(o Options) (*Server, error) {
 		listener: tls.NewListener(listener, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13}),
 		shares:   shares,
 		code:     invite.Code{Address: address, Fingerprint: fingerprint},
+		oneTimePad: o.OneTimePad,
+		sessions: make(map[[16]byte]bool),
+		InvitationUpdates: make(chan struct{}, 1),
 		peers:    make(map[*peer]bool), transfers: make(chan struct{}, maxConcurrentDownloads),
 		Events: make(chan string, 256),
 	}
@@ -109,7 +119,11 @@ func Start(o Options) (*Server, error) {
 	return s, nil
 }
 
-func (s *Server) Invitation() string { return s.code.String() }
+func (s *Server) Invitation() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.code.String()
+}
 func (s *Server) Address() string    { return s.listener.Addr().String() }
 func (s *Server) Close() error {
 	s.mu.Lock()
@@ -154,13 +168,17 @@ func (s *Server) serveConn(conn net.Conn) {
 		return
 	}
 	token, err := hex.DecodeString(first.Token)
-	if err != nil || len(token) != len(s.code.Secret) || subtle.ConstantTimeCompare(token, s.code.Secret[:]) != 1 {
-		_ = wire.Write(conn, wire.Message{Type: "error", Error: "invalid invitation secret"})
+	if err != nil || len(token) != 16 {
+		_ = wire.Write(conn, wire.Message{Type: "error", Error: "invalid credential"})
 		return
 	}
 	conn.SetDeadline(time.Time{})
 	switch first.Role {
 	case "download":
+		if !s.validDownloadToken(token) {
+			_ = wire.Write(conn, wire.Message{Type: "error", Error: "download credential invalid or expired"})
+			return
+		}
 		select {
 		case s.transfers <- struct{}{}:
 			defer func() { <-s.transfers }()
@@ -169,12 +187,16 @@ func (s *Server) serveConn(conn net.Conn) {
 			wire.Write(conn, wire.Message{Type: "error", Error: "download capacity reached; retry shortly"})
 		}
 	case "control":
-		s.control(conn, first.Name)
+		if !s.validInvitation(token) {
+			_ = wire.Write(conn, wire.Message{Type: "error", Error: "invitation invalid, expired, or already used"})
+			return
+		}
+		s.control(conn, first.Name, token)
 	default:
 		wire.Write(conn, wire.Message{Type: "error", Error: "unknown connection role"})
 	}
 }
-func (s *Server) control(conn net.Conn, requested string) {
+func (s *Server) control(conn net.Conn, requested string, token []byte) {
 	p := &peer{conn: conn}
 	files, err := s.shares.List()
 	if err != nil {
@@ -186,6 +208,34 @@ func (s *Server) control(conn net.Conn, requested string) {
 		s.mu.Unlock()
 		p.send(wire.Message{Type: "error", Error: "room full or closing"})
 		return
+	}
+	// Recheck atomically; two clients may have passed the early token check.
+	if subtle.ConstantTimeCompare(token, s.code.Secret[:]) != 1 {
+		s.mu.Unlock()
+		p.send(wire.Message{Type: "error", Error: "invitation expired or already used"})
+		return
+	}
+	var sessionToken [16]byte
+	if s.oneTimePad {
+		var next [16]byte
+		if _, err := rand.Read(sessionToken[:]); err != nil {
+			s.mu.Unlock()
+			p.send(wire.Message{Type: "error", Error: "unable to create download credential"})
+			return
+		}
+		if _, err := rand.Read(next[:]); err != nil {
+			s.mu.Unlock()
+			p.send(wire.Message{Type: "error", Error: "unable to rotate invitation"})
+			return
+		}
+		p.session = sessionToken
+		s.sessions[sessionToken] = true
+		s.code.Secret = next
+		// Coalesce notifications: Invitation() reads the current code.
+		select {
+		case s.InvitationUpdates <- struct{}{}:
+		default:
+		}
 	}
 	name := sanitize(requested, 32)
 	if name == "" {
@@ -206,12 +256,19 @@ func (s *Server) control(conn net.Conn, requested string) {
 	defer func() {
 		s.mu.Lock()
 		delete(s.peers, p)
+		if s.oneTimePad {
+			delete(s.sessions, p.session)
+		}
 		count := len(s.peers)
 		s.mu.Unlock()
 		s.broadcast(wire.Message{Type: "notice", Text: p.name + " left the room", Users: count})
 		s.log(p.name + " disconnected")
 	}()
-	if err := p.send(wire.Message{Type: "welcome", Name: name, Files: files, Users: count, Text: "Laserline DX BBS-like area: downloads and encrypted chat"}); err != nil {
+	welcome := wire.Message{Type: "welcome", Name: name, Files: files, Users: count, Text: "Laserline DX BBS-like area: downloads and encrypted chat"}
+	if s.oneTimePad {
+		welcome.Token = hex.EncodeToString(sessionToken[:])
+	}
+	if err := p.send(welcome); err != nil {
 		return
 	}
 	s.log(p.name + " joined")

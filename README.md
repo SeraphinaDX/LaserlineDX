@@ -13,7 +13,7 @@ configuration, and no third-party relay required.
 forums, persistent chat archives, or remote uploads. It concentrates on
 encrypted downloads, browsing shared folders, and ephemeral group chat.
 
-**Status: 0.6.0 experimental source release.** The protocol has not undergone
+**Status: 0.7.0 experimental source release.** The protocol has not undergone
 an independent security audit. Do not treat it as a hardened public file server.
 
 ## Build
@@ -105,6 +105,35 @@ laserline serve --listen :47477 --advertise your.public.ip
 On one LAN, Laserline DX automatically advertises a detected local IPv4 address.
 If it selects the wrong interface, use `--advertise` explicitly. The default
 listening port is **TCP 47477**.
+
+## One-time-pad invitation mode
+
+Add `--one-time-pad` when serving if each invitation code should admit **one
+user only**:
+
+```sh
+laserline serve --one-time-pad
+laserline serve --one-time-pad ~/SharedFiles
+```
+
+The host console displays an `LD1-` invitation. When a client successfully
+joins the encrypted chat/file area, the server **expires that invitation** and
+prints a fresh one for the next visitor. Two people cannot both join using the
+same code, even if they connect at the same time. Rejected downloads, failed
+joins, or a full room do not consume the current invitation.
+
+Connected users stay online when a new invitation is issued. Each receives a
+different session-only download credential over TLS 1.3, allowing existing
+downloads, retries and chat to continue. The session credential is invalidated
+when its control connection ends. If a client disconnects, they need the
+**server's newest invitation** to join again; saved partial files can then
+resume as long as the shared files have not changed.
+
+The flag defaults to **off**: ordinary `laserline serve` continues to issue
+one code usable by multiple visitors until shutdown.
+
+Despite its name, this option is a *one-use invitation mode*, **not a
+cryptographic one-time pad**. TLS 1.3 is still responsible for encryption.
 
 ## Privacy and encryption
 
