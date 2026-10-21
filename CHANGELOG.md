@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.0 — Laserline DX rename (breaking)
+
+- Renamed Warp to **Laserline DX**; the executable and CLI command are now `laserline`.
+- Moved the entrypoint to `cmd/laserline` and renamed the Go module to `laserline`.
+- Updated terminal and server branding, certificate subject, README, build targets
+  and messages; the tool remains a BBS-like file-sharing and chat application.
+- Replaced the invitation prefix with `LD1-`, download staging files with
+  `.laserline-part` and the default download directory with `LaserlineDownloads`.
+- No compatibility with the former Warp invitation codes or partial files;
+  update both the serving and connecting applications.
+- Preserved TLS 1.3, multiple users, recursive directory downloads,
+  SHA-256 verification, resumable transfers (within this release), and chat.
+
+
 ## Unreleased — Alacritty background rendering fix
 
 - Fix patchy/missing background colour: consistently paint the entire terminal,

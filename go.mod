@@ -1,4 +1,4 @@
-module warp
+module laserline
 
 go 1.24.0
 

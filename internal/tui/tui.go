@@ -1,4 +1,4 @@
-// Package tui provides Warp's gotui v5 BBS-like file and chat terminal client.
+// Package tui provides Laserline's gotui v5 BBS-like file and chat terminal client.
 package tui
 
 import (
@@ -13,22 +13,22 @@ import (
 	ui "github.com/metaspartan/gotui/v5"
 	"github.com/metaspartan/gotui/v5/widgets"
 
-	"warp/internal/transfer"
-	"warp/internal/wire"
+	"laserline/internal/transfer"
+	"laserline/internal/wire"
 )
 
 const actionBar = " [ Download All ]  [ Chat ]  [ Files ]"
 
-// Warp's neon terminal palette: violet plasma, hot-pink accents, cyan signal
+// Laserline's neon terminal palette: violet plasma, hot-pink accents, cyan signal
 // lines and gold highlights on a dark-space background. RGB colors are
 // downgraded by the terminal backend when truecolor is unavailable.
 var (
-	warpViolet = ui.NewRGBColor(161, 83, 255)
-	warpPink   = ui.NewRGBColor(255, 72, 170)
-	warpCyan   = ui.NewRGBColor(78, 232, 244)
-	warpGold   = ui.NewRGBColor(255, 209, 99)
-	warpInk    = ui.NewRGBColor(12, 14, 39)
-	warpWhite  = ui.NewRGBColor(228, 235, 254)
+	laserlineViolet = ui.NewRGBColor(161, 83, 255)
+	laserlinePink   = ui.NewRGBColor(255, 72, 170)
+	laserlineCyan   = ui.NewRGBColor(78, 232, 244)
+	laserlineGold   = ui.NewRGBColor(255, 209, 99)
+	laserlineInk    = ui.NewRGBColor(12, 14, 39)
+	laserlineWhite  = ui.NewRGBColor(228, 235, 254)
 )
 
 const doubleClickInterval = 450 * time.Millisecond
@@ -277,7 +277,7 @@ func Run(ctx context.Context, c *transfer.Client, welcome wire.Message, download
 		downloads: downloads, progress: make(chan downloadEvent, 32), completed: make(chan batchResult, 1),
 		input: widgets.NewInput(), flagged: make(map[string]bool), flaggedDirs: make(map[string]bool),
 	}
-	a.chat = append(a.chat, "Welcome to Warp's BBS-like file area and live chat. Chat is session-only.")
+	a.chat = append(a.chat, "Welcome to Laserline DX's BBS-like file area and live chat. Chat is session-only.")
 	a.rebuildEntries("")
 	a.draw()
 	events := ui.PollEventsWithContext(ctx)
@@ -864,38 +864,38 @@ func (a *bbs) draw() {
 	if width < 40 || height < 16 {
 		ui.Clear()
 		p := widgets.NewParagraph()
-		p.Text = "Warp needs at least 40x16 terminal cells"
-		styleWarpPanel(&p.Block, warpViolet)
-		p.TextStyle = ui.NewStyle(warpWhite, warpInk)
+		p.Text = "Laserline DX needs at least 40x16 terminal cells"
+		styleLaserlinePanel(&p.Block, laserlineViolet)
+		p.TextStyle = ui.NewStyle(laserlineWhite, laserlineInk)
 		p.SetRect(0, 0, max(width, 1), max(height, 1))
-		ui.Render(warpBackdrop(max(width, 1), max(height, 1)), p)
+		ui.Render(laserlineBackdrop(max(width, 1), max(height, 1)), p)
 		return
 	}
 	a.layout = makeLayout(width, height, a.composing)
 	a.keepVisible()
 	l := a.layout
 	header := widgets.NewParagraph()
-	header.Title = " ✦ WARP ✦ // ENCRYPTED FILE + CHAT LINK "
+	header.Title = " ✦ LASERLINE DX ✦ // ENCRYPTED FILE + CHAT LINK "
 	header.Text = fmt.Sprintf("  ◆ TLS 1.3  //  USER: %s  //  ONLINE: %d  //  FILES: %d  //  TAGS: %d",
 		safe(a.nick), a.people, a.fileCount(), a.tagCount())
-	styleWarpPanel(&header.Block, warpViolet)
-	header.TextStyle = ui.NewStyle(warpCyan, warpInk)
+	styleLaserlinePanel(&header.Block, laserlineViolet)
+	header.TextStyle = ui.NewStyle(laserlineCyan, laserlineInk)
 	header.SetRect(0, 0, width, 3)
 
 	foot := widgets.NewParagraph()
-	styleWarpPanel(&foot.Block, warpViolet)
+	styleLaserlinePanel(&foot.Block, laserlineViolet)
 	foot.Title = " SPACE: TAG  D: BATCH  ENTER/2-CLICK: OPEN/GET  TAB: CHAT  ESC: BACK "
 	foot.Text = actionBar
-	foot.TextStyle = ui.NewStyle(warpCyan, warpInk)
+	foot.TextStyle = ui.NewStyle(laserlineCyan, laserlineInk)
 	foot.SetRect(0, height-4, width, height-1)
 	// A one-cell status strip needs a dedicated drawable: gotui Paragraph
 	// reserves an inner border even when Border is disabled.
-	status := warpStatus(a.status, width, height)
+	status := laserlineStatus(a.status, width, height)
 
 	transferPanel := widgets.NewParagraph()
 	transferPanel.Title = " TRANSFER STATUS "
-	styleWarpPanel(&transferPanel.Block, warpPink)
-	transferPanel.TextStyle = ui.NewStyle(warpCyan, warpInk)
+	styleLaserlinePanel(&transferPanel.Block, laserlinePink)
+	transferPanel.TextStyle = ui.NewStyle(laserlineCyan, laserlineInk)
 	transferPanel.WrapText = false
 	transferPanel.Text = downloadPanelText(a.download, l.transfer.right-l.transfer.left-2, l.transfer.bottom-l.transfer.top-2)
 	transferPanel.SetRect(l.transfer.left, l.transfer.top, l.transfer.right, l.transfer.bottom)
@@ -905,8 +905,8 @@ func (a *bbs) draw() {
 	end := min(len(a.entries), start+l.fileRows)
 	where := "/" + a.dir
 	list.Title = fmt.Sprintf(" FILE VAULT %s // %d-%d/%d | %d tags ", safe(where), visibleStart(start, end), end, len(a.entries), a.tagCount())
-	styleWarpPanel(&list.Block, warpCyan)
-	list.TextStyle = ui.NewStyle(warpWhite, warpInk)
+	styleLaserlinePanel(&list.Block, laserlineCyan)
+	list.TextStyle = ui.NewStyle(laserlineWhite, laserlineInk)
 	list.WrapText = false
 	list.Rows = make([]string, 0, max(1, end-start))
 	for i := start; i < end; i++ {
@@ -938,13 +938,13 @@ func (a *bbs) draw() {
 		list.Rows = []string{"  This directory is empty. Press r to refresh."}
 	}
 	list.SelectedRow = max(0, a.cursor-a.scroll)
-	list.SelectedStyle = ui.NewStyle(warpGold, warpViolet, ui.ModifierBold)
+	list.SelectedStyle = ui.NewStyle(laserlineGold, laserlineViolet, ui.ModifierBold)
 	list.SetRect(l.files.left, l.files.top, l.files.right, l.files.bottom)
 
 	chat := widgets.NewParagraph()
 	chat.Title = " SIGNAL // LIVE ENCRYPTED CHAT "
-	styleWarpPanel(&chat.Block, warpPink)
-	chat.TextStyle = ui.NewStyle(warpWhite, warpInk)
+	styleLaserlinePanel(&chat.Block, laserlinePink)
+	chat.TextStyle = ui.NewStyle(laserlineWhite, laserlineInk)
 	chat.WrapText = true
 	chatText := a.chat
 	maxRows := l.fileRows
@@ -957,25 +957,25 @@ func (a *bbs) draw() {
 	var prompt ui.Drawable
 	if a.composing {
 		a.input.Title = " CHAT / Enter: send, Escape: files "
-		styleWarpPanel(&a.input.Block, warpPink)
-		a.input.TextStyle = ui.NewStyle(warpWhite, warpInk)
-		a.input.CursorStyle = ui.NewStyle(warpInk, warpGold)
+		styleLaserlinePanel(&a.input.Block, laserlinePink)
+		a.input.TextStyle = ui.NewStyle(laserlineWhite, laserlineInk)
+		a.input.CursorStyle = ui.NewStyle(laserlineInk, laserlineGold)
 		a.input.SetRect(l.prompt.left, l.prompt.top, l.prompt.right, l.prompt.bottom)
 		prompt = a.input
 	} else {
 		p := widgets.NewParagraph()
 		p.Title = " CHAT PROMPT "
-		styleWarpPanel(&p.Block, warpPink)
-		p.TextStyle = ui.NewStyle(warpCyan, warpInk)
+		styleLaserlinePanel(&p.Block, laserlinePink)
+		p.TextStyle = ui.NewStyle(laserlineCyan, laserlineInk)
 		p.Text = " Press Tab or click here to write a message."
 		p.SetRect(l.prompt.left, l.prompt.top, l.prompt.right, l.prompt.bottom)
 		prompt = p
 	}
 	ui.Clear()
-	// Every cell begins with the Warp background, including blank pane edges
+	// Every cell begins with the Laserline background, including blank pane edges
 	// and the bottom status row. Text and borders also use opaque backgrounds
 	// so rendering over the canvas cannot reveal Alacritty's default colour.
-	backdrop := warpBackdrop(width, height)
+	backdrop := laserlineBackdrop(width, height)
 	if l.wide {
 		ui.Render(backdrop, header, list, chat, transferPanel, prompt, foot, status)
 	} else if a.composing {

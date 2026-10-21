@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-const Prefix = "W1-"
+const Prefix = "LD1-"
 
 type Code struct {
 	Address     string
@@ -36,7 +36,7 @@ func Parse(input string) (Code, error) {
 	var c Code
 	input = strings.TrimSpace(input)
 	if !strings.HasPrefix(input, Prefix) {
-		return c, errors.New("invalid invitation prefix (expected W1-)")
+		return c, errors.New("invalid invitation prefix (expected LD1-)")
 	}
 	data, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(input, Prefix))
 	if err != nil || len(data) < 1 {

@@ -17,8 +17,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"warp/internal/invite"
-	"warp/internal/wire"
+	"laserline/internal/invite"
+	"laserline/internal/wire"
 )
 
 const maxPeers = 64
@@ -105,7 +105,7 @@ func Start(o Options) (*Server, error) {
 		return nil, err
 	}
 	go s.run()
-	s.log("Warp server listening at " + listener.Addr().String())
+	s.log("Laserline DX server listening at " + listener.Addr().String())
 	return s, nil
 }
 
@@ -211,7 +211,7 @@ func (s *Server) control(conn net.Conn, requested string) {
 		s.broadcast(wire.Message{Type: "notice", Text: p.name + " left the room", Users: count})
 		s.log(p.name + " disconnected")
 	}()
-	if err := p.send(wire.Message{Type: "welcome", Name: name, Files: files, Users: count, Text: "Warp BBS: downloads and encrypted chat"}); err != nil {
+	if err := p.send(wire.Message{Type: "welcome", Name: name, Files: files, Users: count, Text: "Laserline DX BBS-like area: downloads and encrypted chat"}); err != nil {
 		return
 	}
 	s.log(p.name + " joined")

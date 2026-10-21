@@ -11,31 +11,31 @@ import (
 	"strings"
 	"syscall"
 
-	"warp/internal/hub"
-	"warp/internal/invite"
-	"warp/internal/transfer"
-	"warp/internal/tui"
+	"laserline/internal/hub"
+	"laserline/internal/invite"
+	"laserline/internal/transfer"
+	"laserline/internal/tui"
 )
 
-const version = "0.5.0"
+const version = "0.6.0"
 
 func usage() {
-	fmt.Print(`Warp - encrypted BBS-like file sharing and chat (v` + version + `)
+	fmt.Print(`Laserline DX - encrypted BBS-like file sharing and chat (v` + version + `)
 
 Usage:
-  warp serve [options] [file-or-directory]
-  warp connect [options] CODE
+  laserline serve [options] [file-or-directory]
+  laserline connect [options] CODE
 
 Commands:
   serve     Share one file, one directory recursively, or (by default) .
-  connect   Join Warp for BBS-like browsing, resumable downloads and chat.
+  connect   Join Laserline for BBS-like browsing, resumable downloads and chat.
 
 Examples:
-  warp serve
-  warp serve ~/Downloads
-  warp serve --listen :47477 --advertise 192.168.1.50
-  warp connect W1-... 
-  warp connect --nick Alice W1-...
+  laserline serve
+  laserline serve ~/Downloads
+  laserline serve --listen :47477 --advertise 192.168.1.50
+  laserline connect LD1-... 
+  laserline connect --nick Alice LD1-...
 
 All network traffic uses TLS 1.3. Direct connectivity is required; for
 Internet access use port forwarding or a VPN such as Tailscale.
@@ -43,7 +43,7 @@ Internet access use port forwarding or a VPN such as Tailscale.
 }
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "Warp:", err)
+		fmt.Fprintln(os.Stderr, "Laserline DX:", err)
 		os.Exit(1)
 	}
 }
@@ -61,7 +61,7 @@ func run() error {
 		usage()
 		return nil
 	case "version", "--version":
-		fmt.Println("Warp", version)
+		fmt.Println("Laserline DX", version)
 		return nil
 	default:
 		usage()
@@ -88,9 +88,9 @@ func serve(args []string) error {
 	}
 	defer srv.Close()
 	abs, _ := filepath.Abs(share)
-	fmt.Printf("\n  ✦ WARP %s  /  ENCRYPTED BBS-LIKE FILE + CHAT\n\n", version)
+	fmt.Printf("\n  ✦ LASERLINE DX %s  /  ENCRYPTED BBS-LIKE FILE + CHAT\n\n", version)
 	fmt.Printf("  Sharing: %s\n  Listening: %s\n  Invitation code (share privately):\n\n%s\n\n", abs, srv.Address(), srv.Invitation())
-	fmt.Println("  Ask the recipient to run: warp connect CODE")
+	fmt.Println("  Ask the recipient to run: laserline connect CODE")
 	fmt.Println("  TLS 1.3 · multiple users · resumable downloads · Ctrl+C to stop")
 	fmt.Println("  Code expires when this server process stops.")
 	fmt.Println()
@@ -99,7 +99,7 @@ func serve(args []string) error {
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Println("\nWarp server stopped")
+			fmt.Println("\nLaserline DX server stopped")
 			return nil
 		case e := <-srv.Events:
 			fmt.Println("  • " + e)
@@ -109,7 +109,7 @@ func serve(args []string) error {
 func connect(args []string) error {
 	fs := flag.NewFlagSet("connect", flag.ContinueOnError)
 	nick := fs.String("nick", "Guest", "chat nickname")
-	downloads := fs.String("downloads", "", "directory for downloaded files (default: ./WarpDownloads)")
+	downloads := fs.String("downloads", "", "directory for downloaded files (default: ./LaserlineDownloads)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -121,7 +121,7 @@ func connect(args []string) error {
 		return err
 	}
 	if strings.TrimSpace(*downloads) == "" {
-		*downloads = "WarpDownloads"
+		*downloads = "LaserlineDownloads"
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

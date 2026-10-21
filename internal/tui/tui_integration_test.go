@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"warp/internal/hub"
-	"warp/internal/invite"
-	"warp/internal/transfer"
+	"laserline/internal/hub"
+	"laserline/internal/invite"
+	"laserline/internal/transfer"
 )
 
 func TestBatchDownloadsMultipleFlaggedFiles(t *testing.T) {

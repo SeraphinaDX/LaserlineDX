@@ -14,7 +14,7 @@ import (
 	"math/big"
 	"time"
 
-	"warp/internal/invite"
+	"laserline/internal/invite"
 )
 
 func newIdentity() (tls.Certificate, [32]byte, error) {
@@ -29,7 +29,7 @@ func newIdentity() (tls.Certificate, [32]byte, error) {
 	}
 	template := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "Warp temporary session"},
+		Subject:      pkix.Name{CommonName: "Laserline DX temporary session"},
 		NotBefore:    time.Now().Add(-time.Minute), NotAfter: time.Now().Add(7 * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},

@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"warp/internal/wire"
+	"laserline/internal/wire"
 )
 
 const maxFiles = 10000

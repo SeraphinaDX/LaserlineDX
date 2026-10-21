@@ -1,0 +1,5 @@
+# Laserline DX local binary and download artifacts
+/laserline
+/LaserlineDownloads/
+*.laserline-part
+*.laserline-part.json
